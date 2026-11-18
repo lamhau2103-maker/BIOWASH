@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -12,7 +12,10 @@ import {
   X,
 } from 'lucide-react';
 import { repository } from '../lib/repository';
-import { CHECKLIST_GROUPS, ChecklistItem, Site, UserRole } from '../types/database';
+import { ChecklistItem, Site, UserRole } from '../types/database';
+import { stripGroupPrefix } from './InspectionView';
+
+const NEW_GROUP_OPTION_VALUE = '__NEW_GROUP__';
 
 interface ItemManagerModalProps {
   site: Site;
@@ -31,7 +34,7 @@ export const ItemManagerModal: React.FC<ItemManagerModalProps> = ({
   onClose,
   onChanged,
 }) => {
-  const canEdit = userRole === 'admin' || userRole === 'inspector';
+  const canEdit = userRole === 'admin';
   const siteItems = items
     .filter((i) => i.site_id === site.id)
     .sort((a, b) => a.sort_order - b.sort_order);
@@ -39,8 +42,42 @@ export const ItemManagerModal: React.FC<ItemManagerModalProps> = ({
   const activeItems = siteItems.filter((i) => i.is_active);
   const hiddenItems = siteItems.filter((i) => !i.is_active);
 
+  const [dbGroups, setDbGroups] = useState<Array<{ name: string; sort_order: number }>>([]);
+
+  useEffect(() => {
+    let mounted = true;
+    repository.getChecklistGroups(site.id).then((rows) => {
+      if (!mounted) return;
+      setDbGroups(rows.map((r) => ({ name: r.name, sort_order: r.sort_order })));
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [site.id, items.length]);
+
+  const dynamicGroups = useMemo(() => {
+    const map = new Map<string, { normKey: string; cleanName: string; rawGroupName: string }>();
+    dbGroups.forEach((g) => {
+      const clean = stripGroupPrefix(g.name);
+      if (!clean) return;
+      const norm = clean.toLowerCase();
+      if (!map.has(norm)) {
+        map.set(norm, { normKey: norm, cleanName: clean, rawGroupName: clean });
+      }
+    });
+    activeItems.forEach((it) => {
+      const clean = stripGroupPrefix(it.group_name) || it.group_name.trim();
+      const norm = clean.toLowerCase();
+      if (!map.has(norm)) {
+        map.set(norm, { normKey: norm, cleanName: clean, rawGroupName: it.group_name });
+      }
+    });
+    return Array.from(map.values());
+  }, [activeItems, dbGroups]);
+
   const [newTitle, setNewTitle] = useState('');
-  const [newGroup, setNewGroup] = useState<string>(CHECKLIST_GROUPS[0]);
+  const [newGroup, setNewGroup] = useState<string>('');
+  const [customGroupName, setCustomGroupName] = useState<string>('');
   const [newCritical, setNewCritical] = useState(false);
   const [editingItem, setEditingItem] = useState<ChecklistItem | null>(null);
   const [confirmHideItem, setConfirmHideItem] = useState<ChecklistItem | null>(null);
@@ -51,16 +88,76 @@ export const ItemManagerModal: React.FC<ItemManagerModalProps> = ({
   const [busy, setBusy] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (newGroup === NEW_GROUP_OPTION_VALUE) return;
+    if (dynamicGroups.length > 0) {
+      const exists = dynamicGroups.some((g) => g.normKey === newGroup);
+      if (!exists) {
+        setNewGroup(dynamicGroups[0].normKey);
+      }
+    } else {
+      setNewGroup(NEW_GROUP_OPTION_VALUE);
+    }
+  }, [dynamicGroups, newGroup]);
+
   const handleAddOrUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canEdit || !newTitle.trim()) return;
+    if (!canEdit) return;
+    const trimmedTitle = newTitle.trim();
+    if (!trimmedTitle) {
+      setErrMsg('Tên hạng mục không được để trống.');
+      return;
+    }
+
+    let targetGroupRaw = '';
+    let targetGroupNorm = '';
+    const isCreatingGroup = newGroup === NEW_GROUP_OPTION_VALUE;
+
+    if (isCreatingGroup) {
+      const cleanNew = stripGroupPrefix(customGroupName.trim());
+      if (!cleanNew) {
+        setErrMsg('Vui lòng nhập tên hạng mục lớn (nhóm) mới.');
+        return;
+      }
+      targetGroupNorm = cleanNew.toLowerCase();
+      const found = dynamicGroups.find((g) => g.normKey === targetGroupNorm);
+      targetGroupRaw = found ? found.rawGroupName : cleanNew;
+    } else {
+      const found = dynamicGroups.find((g) => g.normKey === newGroup);
+      if (!found) {
+        setErrMsg('Vui lòng chọn nhóm hạng mục.');
+        return;
+      }
+      targetGroupRaw = found.rawGroupName;
+      targetGroupNorm = found.normKey;
+    }
+
+    const isDuplicate = activeItems.some((it) => {
+      if (editingItem && it.id === editingItem.id) return false;
+      const itNorm = (stripGroupPrefix(it.group_name) || it.group_name.trim()).toLowerCase();
+      return itNorm === targetGroupNorm && it.title.trim().toLowerCase() === trimmedTitle.toLowerCase();
+    });
+
+    if (isDuplicate) {
+      setErrMsg('Cảnh báo: Tên mục nhỏ này đã tồn tại trong cùng nhóm!');
+      return;
+    }
+
     setBusy(true);
     setErrMsg(null);
     try {
+      if (isCreatingGroup) {
+        await repository.ensureChecklistGroup({
+          site_id: site.id,
+          name: targetGroupRaw,
+          sort_order: dynamicGroups.length + 1,
+        });
+      }
+
       if (editingItem) {
         await repository.updateChecklistItem(editingItem.id, {
-          title: newTitle.trim(),
-          group_name: newGroup,
+          title: trimmedTitle,
+          group_name: targetGroupRaw,
           is_critical: newCritical,
         });
         setEditingItem(null);
@@ -69,14 +166,18 @@ export const ItemManagerModal: React.FC<ItemManagerModalProps> = ({
           siteItems.length > 0 ? Math.max(...siteItems.map((i) => i.sort_order)) + 1 : 1;
         await repository.createChecklistItem({
           site_id: site.id,
-          group_name: newGroup,
-          title: newTitle.trim(),
+          group_name: targetGroupRaw,
+          title: trimmedTitle,
           is_critical: newCritical,
           sort_order: nextSort,
         });
       }
       setNewTitle('');
+      setCustomGroupName('');
       setNewCritical(false);
+      if (isCreatingGroup) {
+        setNewGroup(targetGroupNorm);
+      }
       onChanged();
     } catch (err) {
       setErrMsg(err instanceof Error ? err.message : 'Lỗi khi lưu hạng mục.');
@@ -103,7 +204,7 @@ export const ItemManagerModal: React.FC<ItemManagerModalProps> = ({
     if (!confirmDeleteItem || !canEdit) return;
     setBusy(true);
     try {
-      await repository.deleteChecklistItem(confirmDeleteItem.id);
+      await repository.smartDeleteChecklistItem(confirmDeleteItem.id);
       setConfirmDeleteItem(null);
       onChanged();
     } catch (err) {
@@ -187,7 +288,7 @@ export const ItemManagerModal: React.FC<ItemManagerModalProps> = ({
               Quản lý Hạng Mục · {site.name}
             </h2>
             <p className="text-xs text-slate-700">
-              Thêm, sửa, xóa hoặc kéo-thả đổi thứ tự hạng mục. Ẩn hạng mục sẽ giữ nguyên lịch sử kiểm tra trước đó.
+              Thêm, sửa, xóa hoặc kéo-thả đổi thứ tự hạng mục. Nếu mục đã có lịch sử chấm, xóa sẽ tự động chuyển sang ẩn để bảo toàn lịch sử.
             </p>
           </div>
           <button
@@ -212,19 +313,29 @@ export const ItemManagerModal: React.FC<ItemManagerModalProps> = ({
                 {editingItem ? 'Sửa hạng mục đang chọn' : 'Thêm hạng mục mới cho điểm này'}
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
+                <div className="space-y-2">
                   <label className="block text-xs font-bold mb-1">Nhóm hạng mục</label>
                   <select
                     value={newGroup}
                     onChange={(e) => setNewGroup(e.target.value)}
                     className="w-full min-h-[46px] px-3 rounded-xl glass-tool text-xs sm:text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500"
                   >
-                    {CHECKLIST_GROUPS.map((g) => (
-                      <option key={g} value={g}>
-                        {g}
+                    {dynamicGroups.map((g, idx) => (
+                      <option key={g.normKey} value={g.normKey}>
+                        {idx + 1}) {g.cleanName}
                       </option>
                     ))}
+                    <option value={NEW_GROUP_OPTION_VALUE}>＋ Tạo hạng mục lớn mới…</option>
                   </select>
+                  {newGroup === NEW_GROUP_OPTION_VALUE && (
+                    <input
+                      type="text"
+                      value={customGroupName}
+                      onChange={(e) => setCustomGroupName(e.target.value)}
+                      placeholder="Nhập tên nhóm mới..."
+                      className="w-full min-h-[44px] px-3.5 rounded-xl glass-tool text-xs sm:text-sm font-semibold border border-sky-500"
+                    />
+                  )}
                 </div>
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-bold mb-1">Tên hạng mục kiểm tra</label>
@@ -385,7 +496,9 @@ export const ItemManagerModal: React.FC<ItemManagerModalProps> = ({
                           onClick={() => {
                             setEditingItem(it);
                             setNewTitle(it.title);
-                            setNewGroup(it.group_name);
+                            setNewGroup(
+                              (stripGroupPrefix(it.group_name) || it.group_name.trim()).toLowerCase()
+                            );
                             setNewCritical(it.is_critical);
                           }}
                           className="min-h-[42px] px-3 rounded-xl glass-tool text-xs font-bold flex items-center gap-1"

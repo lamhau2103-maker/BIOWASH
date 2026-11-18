@@ -719,6 +719,83 @@ export const repository = {
     }
   },
 
+  // Smart Delete: Soft delete (is_active = false) if item has history in inspection_results, otherwise Hard delete
+  async smartDeleteChecklistItem(itemId: string): Promise<{ mode: 'soft' | 'hard' }> {
+    const { count, error: countErr } = await supabase
+      .from('inspection_results')
+      .select('id', { count: 'exact', head: true })
+      .eq('item_id', itemId);
+
+    if (!countErr && count !== null && count > 0) {
+      await this.updateChecklistItem(itemId, { is_active: false });
+      return { mode: 'soft' };
+    }
+
+    await supabase.from('corrective_actions').delete().eq('item_id', itemId);
+    const { error: delErr } = await supabase.from('checklist_items').delete().eq('id', itemId);
+    if (delErr) {
+      // Fallback to soft delete if FK constraint prevents hard delete
+      await this.updateChecklistItem(itemId, { is_active: false });
+      return { mode: 'soft' };
+    }
+    return { mode: 'hard' };
+  },
+
+  // Optional checklist_groups table support (gracefully falls back if table not yet created)
+  async getChecklistGroups(
+    siteId?: string
+  ): Promise<Array<{ id: string; site_id: string; name: string; sort_order: number; is_active: boolean }>> {
+    try {
+      let query = supabase
+        .from('checklist_groups')
+        .select('*')
+        .eq('is_active', true)
+        .order('sort_order', { ascending: true });
+      if (siteId) {
+        query = query.eq('site_id', siteId);
+      }
+      const { data, error } = await query;
+      if (error || !data) return [];
+      return data as Array<{
+        id: string;
+        site_id: string;
+        name: string;
+        sort_order: number;
+        is_active: boolean;
+      }>;
+    } catch {
+      return [];
+    }
+  },
+
+  async ensureChecklistGroup(params: {
+    site_id: string;
+    name: string;
+    sort_order: number;
+  }): Promise<void> {
+    try {
+      const cleanName = params.name.replace(/^\d+[\)\.\-\:]\s*/, '').trim();
+      if (!cleanName) return;
+      const { data: existing } = await supabase
+        .from('checklist_groups')
+        .select('id')
+        .eq('site_id', params.site_id)
+        .ilike('name', cleanName)
+        .maybeSingle();
+
+      if (!existing?.id) {
+        await supabase.from('checklist_groups').insert({
+          site_id: params.site_id,
+          name: cleanName,
+          sort_order: params.sort_order,
+          is_active: true,
+        });
+      }
+    } catch {
+      // Ignore if checklist_groups table has not been created yet; group_name on checklist_items persists it
+    }
+  },
+
   async copyDefaultItemsToSite(siteId: string, sourceSiteId?: string): Promise<void> {
     let itemsToCopy = DEFAULT_TEMPLATE_ITEMS;
     if (sourceSiteId) {

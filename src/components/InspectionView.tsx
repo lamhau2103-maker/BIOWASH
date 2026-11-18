@@ -16,6 +16,7 @@ import {
   RotateCcw,
   Settings2,
   ShieldAlert,
+  Trash2,
   Truck,
   X,
   XCircle,
@@ -23,7 +24,6 @@ import {
 import { repository } from '../lib/repository';
 import {
   AppSettings,
-  CHECKLIST_GROUPS,
   ChecklistItem,
   Inspection,
   InspectionResultCategory,
@@ -38,6 +38,12 @@ import {
   VehicleWashStep,
 } from '../types/database';
 import { CircularGauge } from './CommonUI';
+
+const NEW_GROUP_OPTION_VALUE = '__NEW_GROUP__';
+
+export function stripGroupPrefix(rawName: string): string {
+  return rawName.replace(/^\d+[\)\.\-\:]\s*/, '').trim();
+}
 
 interface InspectionViewProps {
   profile: Profile;
@@ -141,6 +147,7 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
   onOpenManageItems,
   onOpenManageSites,
 }) => {
+  const isAdmin = profile.role === 'admin';
   const canWrite = profile.role === 'admin' || profile.role === 'inspector';
   const activeSites = useMemo(() => sites.filter((s) => s.is_active), [sites]);
   const currentSite = useMemo(
@@ -164,18 +171,30 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
   const [savingItemId, setSavingItemId] = useState<string | null>(null);
   const [uploadingItemId, setUploadingItemId] = useState<string | null>(null);
 
-  // Quick Add & Quick Edit Item Title Inline
+  // Dynamic groups from checklist_groups table (if created) + checklist_items
+  const [dbGroups, setDbGroups] = useState<Array<{ name: string; sort_order: number }>>([]);
+
+  // Quick Add State (Top bar - unlimited groups + create new group)
   const [showQuickAdd, setShowQuickAdd] = useState(false);
-  const [quickPanelMode, setQuickPanelMode] = useState<'add' | 'edit'>('add');
+  const [quickGroup, setQuickGroup] = useState<string>('');
+  const [newGroupName, setNewGroupName] = useState<string>('');
   const [quickTitle, setQuickTitle] = useState('');
-  const [quickGroup, setQuickGroup] = useState<string>(CHECKLIST_GROUPS[0]);
   const [quickCritical, setQuickCritical] = useState(false);
-  const [quickEditItemId, setQuickEditItemId] = useState<string>('');
-  const [quickEditTitle, setQuickEditTitle] = useState<string>('');
+  const [quickSaving, setQuickSaving] = useState(false);
+
+  // Per-group inline "＋ Thêm mục nhỏ" state
+  const [openAddSubItemGroupKey, setOpenAddSubItemGroupKey] = useState<string | null>(null);
+  const [subItemTitle, setSubItemTitle] = useState<string>('');
+  const [subItemCritical, setSubItemCritical] = useState<boolean>(false);
+  const [subItemSaving, setSubItemSaving] = useState<boolean>(false);
 
   // Inline Edit Item Title directly on Checklist Row
   const [inlineEditItemId, setInlineEditItemId] = useState<string | null>(null);
   const [inlineEditTitle, setInlineEditTitle] = useState<string>('');
+
+  // Confirm Delete Item Modal State
+  const [confirmDeleteItem, setConfirmDeleteItem] = useState<ChecklistItem | null>(null);
+  const [deletingItem, setDeletingItem] = useState(false);
 
   const [completing, setCompleting] = useState(false);
 
@@ -185,6 +204,106 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
       .filter((i) => i.site_id === currentSite.id && i.is_active)
       .sort((a, b) => a.sort_order - b.sort_order);
   }, [checklistItems, currentSite]);
+
+  // Load optional checklist_groups for currentSite
+  useEffect(() => {
+    if (!currentSite) {
+      setDbGroups([]);
+      return;
+    }
+    let mounted = true;
+    repository.getChecklistGroups(currentSite.id).then((rows) => {
+      if (!mounted) return;
+      setDbGroups(rows.map((r) => ({ name: r.name, sort_order: r.sort_order })));
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [currentSite?.id, checklistItems.length]);
+
+  // Build dynamic ordered groups from existing site data (no hardcoded 6 groups)
+  const dynamicSiteGroups = useMemo(() => {
+    const groupMap = new Map<
+      string,
+      {
+        normKey: string;
+        cleanName: string;
+        rawGroupName: string;
+        items: ChecklistItem[];
+      }
+    >();
+
+    // 1. Groups from checklist_groups table (if any exist for this site)
+    dbGroups.forEach((g) => {
+      const clean = stripGroupPrefix(g.name);
+      if (!clean) return;
+      const norm = clean.toLowerCase();
+      if (!groupMap.has(norm)) {
+        groupMap.set(norm, {
+          normKey: norm,
+          cleanName: clean,
+          rawGroupName: clean,
+          items: [],
+        });
+      }
+    });
+
+    // 2. Groups from active checklist_items for this site (in sort_order sequence)
+    siteActiveItems.forEach((item) => {
+      const clean = stripGroupPrefix(item.group_name) || item.group_name.trim();
+      const norm = clean.toLowerCase();
+      const existing = groupMap.get(norm);
+      if (!existing) {
+        groupMap.set(norm, {
+          normKey: norm,
+          cleanName: clean,
+          rawGroupName: item.group_name,
+          items: [item],
+        });
+      } else {
+        // Keep the rawGroupName from items so new items match existing items' group_name
+        if (existing.items.length === 0) {
+          existing.rawGroupName = item.group_name;
+        }
+        existing.items.push(item);
+      }
+    });
+
+    // Filter out empty groups only if they have 0 items AND weren't explicitly created in dbGroups
+    return Array.from(groupMap.values()).filter(
+      (g) => g.items.length > 0 || dbGroups.some((dg) => stripGroupPrefix(dg.name).toLowerCase() === g.normKey)
+    );
+  }, [siteActiveItems, dbGroups]);
+
+  // Ensure quickGroup defaults to the first existing group or NEW_GROUP_OPTION_VALUE
+  useEffect(() => {
+    if (quickGroup === NEW_GROUP_OPTION_VALUE) return;
+    if (dynamicSiteGroups.length > 0) {
+      const exists = dynamicSiteGroups.some((g) => g.normKey === quickGroup);
+      if (!exists) {
+        setQuickGroup(dynamicSiteGroups[0].normKey);
+      }
+    } else {
+      setQuickGroup(NEW_GROUP_OPTION_VALUE);
+    }
+  }, [dynamicSiteGroups, quickGroup]);
+
+  // Helper to check duplicate title in the same group
+  const checkDuplicateInGroup = (
+    candidateTitle: string,
+    targetGroupNormKey: string,
+    excludeItemId?: string
+  ): boolean => {
+    const normalizedCandidate = candidateTitle.trim().toLowerCase();
+    return siteActiveItems.some((it) => {
+      if (excludeItemId && it.id === excludeItemId) return false;
+      const itNormGroup = (stripGroupPrefix(it.group_name) || it.group_name.trim()).toLowerCase();
+      return (
+        itNormGroup === targetGroupNormKey &&
+        it.title.trim().toLowerCase() === normalizedCandidate
+      );
+    });
+  };
 
   // Load or create draft inspection when site changes
   useEffect(() => {
@@ -347,57 +466,187 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
     }
   };
 
+  // YÊU CẦU 1: Thêm nhanh hạng mục ngay tại hiện trường (không giới hạn 6 nhóm + tạo nhóm mới)
   const handleQuickAddItem = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentSite || !quickTitle.trim() || !canWrite) return;
+    if (!currentSite || !isAdmin) return;
+
+    const trimmedTitle = quickTitle.trim();
+    if (!trimmedTitle) {
+      onShowToast('Vui lòng nhập tên mục nhỏ (không được để trống)!');
+      return;
+    }
+
+    let targetGroupRaw = '';
+    let targetGroupNorm = '';
+    let isCreatingNewGroup = quickGroup === NEW_GROUP_OPTION_VALUE;
+
+    if (isCreatingNewGroup) {
+      const cleanNewGroup = stripGroupPrefix(newGroupName.trim());
+      if (!cleanNewGroup) {
+        onShowToast('Vui lòng nhập tên hạng mục lớn (nhóm) mới!');
+        return;
+      }
+      targetGroupNorm = cleanNewGroup.toLowerCase();
+      const existingGroup = dynamicSiteGroups.find((g) => g.normKey === targetGroupNorm);
+      if (existingGroup) {
+        targetGroupRaw = existingGroup.rawGroupName;
+        isCreatingNewGroup = false;
+      } else {
+        // Store clean group name without hardcoded numbering
+        targetGroupRaw = cleanNewGroup;
+      }
+    } else {
+      const selectedGroup = dynamicSiteGroups.find((g) => g.normKey === quickGroup);
+      if (!selectedGroup) {
+        onShowToast('Vui lòng chọn nhóm hạng mục hợp lệ!');
+        return;
+      }
+      targetGroupRaw = selectedGroup.rawGroupName;
+      targetGroupNorm = selectedGroup.normKey;
+    }
+
+    if (checkDuplicateInGroup(trimmedTitle, targetGroupNorm)) {
+      onShowToast('Cảnh báo: Mục nhỏ này đã tồn tại trong cùng nhóm!');
+      return;
+    }
+
+    setQuickSaving(true);
     try {
       const nextSort =
         siteActiveItems.length > 0
           ? Math.max(...siteActiveItems.map((i) => i.sort_order)) + 1
           : 1;
+
+      if (isCreatingNewGroup) {
+        const nextGroupSort = dynamicSiteGroups.length + 1;
+        await repository.ensureChecklistGroup({
+          site_id: currentSite.id,
+          name: targetGroupRaw,
+          sort_order: nextGroupSort,
+        });
+        setDbGroups((prev) => [
+          ...prev,
+          { name: targetGroupRaw, sort_order: nextGroupSort },
+        ]);
+      }
+
       await repository.createChecklistItem({
         site_id: currentSite.id,
-        group_name: quickGroup,
-        title: quickTitle.trim(),
+        group_name: targetGroupRaw,
+        title: trimmedTitle,
         is_critical: quickCritical,
         sort_order: nextSort,
       });
+
+      // Keep form open, clear item title input, switch dropdown to the newly created group so user can keep adding
       setQuickTitle('');
       setQuickCritical(false);
-      setShowQuickAdd(false);
+      if (isCreatingNewGroup) {
+        setNewGroupName('');
+        setQuickGroup(targetGroupNorm);
+        setCollapsedGroups((prev) => ({ ...prev, [targetGroupNorm]: false }));
+      }
       onRefresh();
-      onShowToast('Đã thêm nhanh hạng mục vào checklist');
+      onShowToast('Đã thêm');
     } catch (err) {
       onShowToast(err instanceof Error ? err.message : 'Lỗi thêm nhanh hạng mục.');
+    } finally {
+      setQuickSaving(false);
     }
   };
 
-  const handleQuickEditItemSubmit = async (e: React.FormEvent) => {
+  // YÊU CẦU 2: Thêm mục nhỏ trực tiếp bên trong nhóm đang mở
+  const handleAddSubItemInGroup = async (
+    e: React.FormEvent,
+    group: { normKey: string; cleanName: string; rawGroupName: string }
+  ) => {
     e.preventDefault();
-    if (!quickEditItemId || !quickEditTitle.trim() || !canWrite) return;
+    if (!currentSite || !isAdmin) return;
+
+    const trimmed = subItemTitle.trim();
+    if (!trimmed) {
+      onShowToast('Tên mục nhỏ không được để trống!');
+      return;
+    }
+
+    if (checkDuplicateInGroup(trimmed, group.normKey)) {
+      onShowToast('Cảnh báo: Tên mục nhỏ này đã tồn tại trong cùng nhóm!');
+      return;
+    }
+
+    setSubItemSaving(true);
     try {
-      await repository.updateChecklistItem(quickEditItemId, {
-        title: quickEditTitle.trim(),
+      const nextSort =
+        siteActiveItems.length > 0
+          ? Math.max(...siteActiveItems.map((i) => i.sort_order)) + 1
+          : 1;
+
+      await repository.createChecklistItem({
+        site_id: currentSite.id,
+        group_name: group.rawGroupName,
+        title: trimmed,
+        is_critical: subItemCritical,
+        sort_order: nextSort,
       });
-      setShowQuickAdd(false);
+
+      setSubItemTitle('');
+      setSubItemCritical(false);
       onRefresh();
-      onShowToast('Đã cập nhật tên hạng mục thành công');
+      onShowToast('Đã thêm');
     } catch (err) {
-      onShowToast(err instanceof Error ? err.message : 'Lỗi cập nhật tên hạng mục.');
+      onShowToast(err instanceof Error ? err.message : 'Lỗi thêm mục nhỏ.');
+    } finally {
+      setSubItemSaving(false);
     }
   };
 
-  const handleSaveInlineTitle = async (item: ChecklistItem) => {
+  // YÊU CẦU 2: Sửa tên mục nhỏ tại chỗ (inline)
+  const handleSaveInlineTitle = async (item: ChecklistItem, groupNormKey: string) => {
+    if (!isAdmin) return;
     const trimmed = inlineEditTitle.trim();
-    if (!trimmed || !canWrite) return;
+    if (!trimmed) {
+      onShowToast('Tên mục nhỏ không được để trống!');
+      return;
+    }
+    if (checkDuplicateInGroup(trimmed, groupNormKey, item.id)) {
+      onShowToast('Cảnh báo: Tên mục nhỏ này bị trùng với một mục khác trong cùng nhóm!');
+      return;
+    }
     try {
       await repository.updateChecklistItem(item.id, { title: trimmed });
       setInlineEditItemId(null);
       setInlineEditTitle('');
       onRefresh();
-      onShowToast('Đã sửa tên hạng mục thành công');
+      onShowToast('Đã cập nhật tên mục');
     } catch (err) {
       onShowToast(err instanceof Error ? err.message : 'Lỗi sửa tên hạng mục.');
+    }
+  };
+
+  // YÊU CẦU 2: Xóa mục (Soft delete nếu đã có kết quả trong inspection_results, Hard delete nếu chưa có)
+  const handleConfirmDeleteItem = async () => {
+    if (!confirmDeleteItem || !isAdmin) return;
+    setDeletingItem(true);
+    try {
+      const target = confirmDeleteItem;
+      const { mode: deleteMode } = await repository.smartDeleteChecklistItem(target.id);
+      setItemDrafts((prev) => {
+        const next = { ...prev };
+        delete next[target.id];
+        return next;
+      });
+      setConfirmDeleteItem(null);
+      onRefresh();
+      onShowToast(
+        deleteMode === 'soft'
+          ? 'Mục đã có lịch sử chấm nên đã được ẩn (giữ nguyên lịch sử kiểm tra)'
+          : 'Đã xóa mục khỏi danh sách'
+      );
+    } catch (err) {
+      onShowToast(err instanceof Error ? err.message : 'Lỗi khi xóa hạng mục.');
+    } finally {
+      setDeletingItem(false);
     }
   };
 
@@ -688,7 +937,7 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
             </select>
           </div>
 
-          {currentSite && canWrite && (
+          {currentSite && isAdmin && (
             <button
               type="button"
               onClick={() => onOpenManageItems(currentSite)}
@@ -780,153 +1029,89 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
             </div>
           </div>
 
-          {/* Quick Add & Edit Item Inline Bar */}
-          {canWrite && (
+          {/* YÊU CẦU 1: Quick Add Bar (Admin Only, Removed Top "Sửa tên hạng mục" button) */}
+          {isAdmin && (
             <div className="flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  if (showQuickAdd && quickPanelMode === 'add') {
-                    setShowQuickAdd(false);
-                  } else {
-                    setQuickPanelMode('add');
-                    setShowQuickAdd(true);
-                  }
-                }}
-                className={`min-h-[44px] px-4 rounded-xl text-xs font-bold flex items-center gap-1.5 transition ${
-                  showQuickAdd && quickPanelMode === 'add'
+                onClick={() => setShowQuickAdd((prev) => !prev)}
+                className={`min-h-[44px] px-4 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 transition ${
+                  showQuickAdd
                     ? 'btn-accent'
                     : 'bg-teal-500/15 border border-teal-400/30 text-teal-800 dark:text-teal-200 hover:bg-teal-500/25'
                 }`}
               >
                 <Plus className="w-4 h-4" />
                 <span>
-                  {showQuickAdd && quickPanelMode === 'add'
+                  {showQuickAdd
                     ? 'Đóng thêm nhanh'
                     : 'Thêm nhanh hạng mục ngay tại hiện trường'}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  if (showQuickAdd && quickPanelMode === 'edit') {
-                    setShowQuickAdd(false);
-                  } else {
-                    const firstItem = siteActiveItems[0];
-                    if (firstItem) {
-                      setQuickEditItemId(firstItem.id);
-                      setQuickEditTitle(firstItem.title);
-                    }
-                    setQuickPanelMode('edit');
-                    setShowQuickAdd(true);
-                  }
-                }}
-                className={`min-h-[44px] px-4 rounded-xl text-xs font-bold flex items-center gap-1.5 transition ${
-                  showQuickAdd && quickPanelMode === 'edit'
-                    ? 'btn-accent'
-                    : 'glass-tool'
-                }`}
-              >
-                <Edit3 className="w-4 h-4" />
-                <span>
-                  {showQuickAdd && quickPanelMode === 'edit'
-                    ? 'Đóng sửa tên hạng mục'
-                    : 'Sửa tên hạng mục'}
                 </span>
               </button>
             </div>
           )}
 
-          {showQuickAdd && canWrite && quickPanelMode === 'add' && (
+          {showQuickAdd && isAdmin && (
             <form onSubmit={handleQuickAddItem} className="glass-card rounded-2xl p-4 space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <select
-                  value={quickGroup}
-                  onChange={(e) => setQuickGroup(e.target.value)}
-                  className="min-h-[46px] px-3 rounded-xl bg-white/85 dark:bg-slate-900/70 border border-slate-300 dark:border-white/20 text-xs sm:text-sm"
-                >
-                  {CHECKLIST_GROUPS.map((g) => (
-                    <option key={g} value={g}>
-                      {g}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  type="text"
-                  value={quickTitle}
-                  onChange={(e) => setQuickTitle(e.target.value)}
-                  placeholder="Nhập tên hạng mục phát sinh..."
-                  className="sm:col-span-2 min-h-[46px] px-3.5 rounded-xl bg-white/85 dark:bg-slate-900/70 border border-slate-300 dark:border-white/20 text-sm"
-                />
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-200">
+                    Nhóm hạng mục lớn
+                  </label>
+                  <select
+                    value={quickGroup}
+                    onChange={(e) => setQuickGroup(e.target.value)}
+                    className="w-full min-h-[46px] px-3 rounded-xl bg-white/85 dark:bg-slate-900/70 border border-slate-300 dark:border-white/20 text-xs sm:text-sm font-semibold"
+                  >
+                    {dynamicSiteGroups.map((g, idx) => (
+                      <option key={g.normKey} value={g.normKey}>
+                        {idx + 1}) {g.cleanName}
+                      </option>
+                    ))}
+                    <option value={NEW_GROUP_OPTION_VALUE}>＋ Tạo hạng mục lớn mới…</option>
+                  </select>
+
+                  {quickGroup === NEW_GROUP_OPTION_VALUE && (
+                    <input
+                      type="text"
+                      value={newGroupName}
+                      onChange={(e) => setNewGroupName(e.target.value)}
+                      placeholder="Nhập tên nhóm mới (VD: Khu vực khử trùng phụ)..."
+                      className="w-full min-h-[46px] px-3.5 rounded-xl bg-white/95 dark:bg-slate-900/80 border border-teal-500 text-xs sm:text-sm font-semibold"
+                    />
+                  )}
+                </div>
+
+                <div className="sm:col-span-2 space-y-2">
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-200">
+                    Tên mục nhỏ kiểm tra
+                  </label>
+                  <input
+                    type="text"
+                    value={quickTitle}
+                    onChange={(e) => setQuickTitle(e.target.value)}
+                    placeholder="Nhập tên mục nhỏ..."
+                    className="w-full min-h-[46px] px-3.5 rounded-xl bg-white/85 dark:bg-slate-900/70 border border-slate-300 dark:border-white/20 text-sm"
+                  />
+                </div>
               </div>
-              <div className="flex items-center justify-between">
-                <label className="inline-flex items-center gap-2 text-xs font-semibold cursor-pointer min-h-[44px]">
+
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                <label className="inline-flex items-center gap-2 text-xs sm:text-sm font-semibold cursor-pointer min-h-[44px]">
                   <input
                     type="checkbox"
                     checked={quickCritical}
                     onChange={(e) => setQuickCritical(e.target.checked)}
                     className="w-4 h-4 accent-rose-600"
                   />
-                  <span>Hạng mục NGHIÊM TRỌNG</span>
+                  <span>Mục nghiêm trọng</span>
                 </label>
                 <button
                   type="submit"
-                  className="min-h-[44px] px-5 rounded-xl bg-teal-600 text-white text-xs font-bold"
+                  disabled={quickSaving}
+                  className="min-h-[44px] px-5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs sm:text-sm font-bold disabled:opacity-50"
                 >
-                  Lưu hạng mục
-                </button>
-              </div>
-            </form>
-          )}
-
-          {showQuickAdd && canWrite && quickPanelMode === 'edit' && (
-            <form
-              onSubmit={handleQuickEditItemSubmit}
-              className="glass-card rounded-2xl p-4 space-y-3"
-            >
-              <div className="text-xs font-bold text-slate-700 dark:text-white flex items-center gap-1.5">
-                <Edit3 className="w-4 h-4 text-teal-600" />
-                <span>Chọn hạng mục cần sửa tên và nhập tên mới:</span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <select
-                  value={quickEditItemId}
-                  onChange={(e) => {
-                    const selectedId = e.target.value;
-                    setQuickEditItemId(selectedId);
-                    const found = siteActiveItems.find((it) => it.id === selectedId);
-                    if (found) setQuickEditTitle(found.title);
-                  }}
-                  className="min-h-[46px] px-3 rounded-xl bg-white/85 dark:bg-slate-900/70 border border-slate-300 dark:border-white/20 text-xs sm:text-sm font-semibold"
-                >
-                  {siteActiveItems.map((it, i) => (
-                    <option key={it.id} value={it.id}>
-                      Mục {i + 1}: {it.title}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  type="text"
-                  value={quickEditTitle}
-                  onChange={(e) => setQuickEditTitle(e.target.value)}
-                  placeholder="Nhập tên hạng mục mới..."
-                  className="min-h-[46px] px-3.5 rounded-xl bg-white/85 dark:bg-slate-900/70 border border-slate-300 dark:border-white/20 text-sm font-semibold"
-                />
-              </div>
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowQuickAdd(false)}
-                  className="min-h-[44px] px-4 rounded-xl glass-tool text-xs font-bold"
-                >
-                  Hủy
-                </button>
-                <button
-                  type="submit"
-                  className="min-h-[44px] px-5 rounded-xl btn-accent text-xs font-bold"
-                >
-                  Lưu tên hạng mục
+                  {quickSaving ? 'Đang lưu...' : 'Lưu hạng mục'}
                 </button>
               </div>
             </form>
@@ -937,10 +1122,10 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
             <div className="glass-card rounded-3xl p-8 text-center text-sm">
               Đang đồng bộ dữ liệu phiên kiểm tra...
             </div>
-          ) : siteActiveItems.length === 0 ? (
+          ) : dynamicSiteGroups.length === 0 ? (
             <div className="glass-card rounded-3xl p-8 text-center space-y-3">
               <p className="text-sm">Điểm này chưa có hạng mục kiểm tra đang kích hoạt.</p>
-              {canWrite && currentSite && (
+              {isAdmin && currentSite && (
                 <button
                   type="button"
                   onClick={() => onOpenManageItems(currentSite)}
@@ -952,25 +1137,27 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
             </div>
           ) : (
             <div className="space-y-4">
-              {Array.from(new Set(siteActiveItems.map((i) => i.group_name))).map((groupName) => {
-                const groupItems = siteActiveItems.filter((i) => i.group_name === groupName);
-                const isCollapsed = !!collapsedGroups[groupName];
+              {dynamicSiteGroups.map((group, groupIdx) => {
+                const groupItems = group.items;
+                const isCollapsed = !!collapsedGroups[group.normKey];
                 const groupDone = groupItems.filter((i) => !!itemDrafts[i.id]).length;
+                const displayGroupTitle = `${groupIdx + 1}) ${group.cleanName}`;
+                const isAddingSubItemHere = openAddSubItemGroupKey === group.normKey;
 
                 return (
-                  <div key={groupName} className="glass-card rounded-3xl overflow-hidden">
+                  <div key={group.normKey} className="glass-card rounded-3xl overflow-hidden">
                     <button
                       type="button"
                       onClick={() =>
                         setCollapsedGroups((prev) => ({
                           ...prev,
-                          [groupName]: !prev[groupName],
+                          [group.normKey]: !prev[group.normKey],
                         }))
                       }
                       className="w-full min-h-[54px] px-5 py-3.5 flex items-center justify-between text-left bg-teal-500/10 border-b border-slate-300/30 dark:border-white/10"
                     >
                       <div>
-                        <h3 className="text-sm sm:text-base font-bold">{groupName}</h3>
+                        <h3 className="text-sm sm:text-base font-bold">{displayGroupTitle}</h3>
                         <p className="text-xs text-slate-600 dark:text-teal-200/80">
                           Đã chấm {groupDone}/{groupItems.length} mục
                         </p>
@@ -991,7 +1178,7 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
                           return (
                             <div key={item.id} className="p-4 sm:p-5 space-y-3">
                               <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
-                                <div className="space-y-1">
+                                <div className="space-y-1 flex-1">
                                   <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-300">
                                     <span className="font-mono font-bold">Mục {idx + 1}</span>
                                     {item.is_critical && (
@@ -1018,23 +1205,35 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
                                       </>
                                     )}
                                   </div>
+
                                   {inlineEditItemId === item.id ? (
                                     <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
                                       <input
                                         type="text"
+                                        autoFocus
                                         value={inlineEditTitle}
                                         onChange={(e) => setInlineEditTitle(e.target.value)}
-                                        placeholder="Nhập tên hạng mục..."
-                                        className="flex-1 min-h-[42px] px-3.5 rounded-xl bg-white/90 border border-sky-400 text-sm font-bold text-slate-900"
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') {
+                                            e.preventDefault();
+                                            handleSaveInlineTitle(item, group.normKey);
+                                          } else if (e.key === 'Escape') {
+                                            e.preventDefault();
+                                            setInlineEditItemId(null);
+                                            setInlineEditTitle('');
+                                          }
+                                        }}
+                                        placeholder="Nhập tên mục nhỏ..."
+                                        className="flex-1 min-h-[44px] px-3.5 rounded-xl bg-white/95 border border-sky-400 text-sm font-bold text-slate-900"
                                       />
                                       <div className="flex items-center gap-1.5 shrink-0">
                                         <button
                                           type="button"
-                                          onClick={() => handleSaveInlineTitle(item)}
-                                          className="min-h-[40px] px-3.5 rounded-xl btn-accent text-xs font-bold flex items-center gap-1"
+                                          onClick={() => handleSaveInlineTitle(item, group.normKey)}
+                                          className="min-h-[42px] px-3.5 rounded-xl btn-accent text-xs font-bold flex items-center gap-1"
                                         >
                                           <Check className="w-3.5 h-3.5" />
-                                          <span>Lưu tên</span>
+                                          <span>Lưu</span>
                                         </button>
                                         <button
                                           type="button"
@@ -1042,7 +1241,7 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
                                             setInlineEditItemId(null);
                                             setInlineEditTitle('');
                                           }}
-                                          className="min-h-[40px] px-3 rounded-xl glass-tool text-xs font-bold flex items-center gap-1"
+                                          className="min-h-[42px] px-3 rounded-xl glass-tool text-xs font-bold flex items-center gap-1"
                                         >
                                           <X className="w-3.5 h-3.5" />
                                           <span>Hủy</span>
@@ -1054,19 +1253,28 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
                                       <p className="text-base font-bold text-slate-900 dark:text-white leading-snug">
                                         {item.title}
                                       </p>
-                                      {canWrite && (
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            setInlineEditItemId(item.id);
-                                            setInlineEditTitle(item.title);
-                                          }}
-                                          className="min-h-[34px] px-2.5 rounded-xl glass-tool text-[11px] font-bold flex items-center gap-1 shrink-0"
-                                          title="Sửa tên hạng mục này"
-                                        >
-                                          <Edit3 className="w-3.5 h-3.5" />
-                                          <span>Sửa tên</span>
-                                        </button>
+                                      {isAdmin && (
+                                        <div className="flex items-center gap-1.5 shrink-0">
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setInlineEditItemId(item.id);
+                                              setInlineEditTitle(item.title);
+                                            }}
+                                            className="min-h-[38px] min-w-[38px] px-2.5 rounded-xl glass-tool text-xs font-bold flex items-center justify-center gap-1 hover:bg-sky-500/15"
+                                            title="Sửa tên mục nhỏ (Enter để lưu, Esc để hủy)"
+                                          >
+                                            <Edit3 className="w-4 h-4 text-sky-700" />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setConfirmDeleteItem(item)}
+                                            className="min-h-[38px] min-w-[38px] px-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-700 text-xs font-bold flex items-center justify-center gap-1 transition"
+                                            title="Xóa mục nhỏ này"
+                                          >
+                                            <Trash2 className="w-4 h-4" />
+                                          </button>
+                                        </div>
                                       )}
                                     </div>
                                   )}
@@ -1266,6 +1474,84 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
                             </div>
                           );
                         })}
+
+                        {/* YÊU CẦU 2: Ô "＋ Thêm mục nhỏ" ở cuối danh sách của nhóm đang mở (chỉ hiện với Admin) */}
+                        {isAdmin && (
+                          <div className="p-4 sm:p-5 bg-teal-500/5">
+                            {isAddingSubItemHere ? (
+                              <form
+                                onSubmit={(e) => handleAddSubItemInGroup(e, group)}
+                                className="space-y-3"
+                              >
+                                <div className="text-xs font-bold text-teal-800 dark:text-teal-200 flex items-center gap-1.5">
+                                  <Plus className="w-4 h-4" />
+                                  <span>Thêm mục nhỏ vào nhóm &ldquo;{displayGroupTitle}&rdquo;:</span>
+                                </div>
+                                <div className="flex flex-col sm:flex-row gap-2.5">
+                                  <input
+                                    type="text"
+                                    autoFocus
+                                    value={subItemTitle}
+                                    onChange={(e) => setSubItemTitle(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Escape') {
+                                        e.preventDefault();
+                                        setOpenAddSubItemGroupKey(null);
+                                        setSubItemTitle('');
+                                        setSubItemCritical(false);
+                                      }
+                                    }}
+                                    placeholder="Nhập tên mục nhỏ mới..."
+                                    className="flex-1 min-h-[46px] px-3.5 rounded-xl bg-white/95 dark:bg-slate-900/80 border border-teal-500/50 text-sm font-medium"
+                                  />
+                                  <div className="flex flex-wrap items-center justify-between sm:justify-end gap-2.5 shrink-0">
+                                    <label className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold cursor-pointer min-h-[44px] px-2">
+                                      <input
+                                        type="checkbox"
+                                        checked={subItemCritical}
+                                        onChange={(e) => setSubItemCritical(e.target.checked)}
+                                        className="w-4 h-4 accent-rose-600"
+                                      />
+                                      <span>Mục nghiêm trọng</span>
+                                    </label>
+                                    <button
+                                      type="submit"
+                                      disabled={subItemSaving}
+                                      className="min-h-[44px] px-4 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs sm:text-sm font-bold flex items-center gap-1.5 disabled:opacity-50"
+                                    >
+                                      <Check className="w-4 h-4" />
+                                      <span>{subItemSaving ? 'Đang lưu...' : 'Lưu'}</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenAddSubItemGroupKey(null);
+                                        setSubItemTitle('');
+                                        setSubItemCritical(false);
+                                      }}
+                                      className="min-h-[44px] px-3.5 rounded-xl glass-tool text-xs sm:text-sm font-bold flex items-center gap-1"
+                                    >
+                                      <X className="w-4 h-4" />
+                                      <span>Đóng</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              </form>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenAddSubItemGroupKey(group.normKey);
+                                  setSubItemTitle('');
+                                  setSubItemCritical(false);
+                                }}
+                                className="w-full sm:w-auto min-h-[44px] px-4 rounded-xl bg-teal-500/15 hover:bg-teal-500/25 border border-teal-500/30 text-teal-800 dark:text-teal-200 text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-1.5 transition"
+                              >
+                                <span>＋ Thêm mục nhỏ</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1293,6 +1579,46 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
                   >
                     {completing ? 'Đang hoàn tất...' : 'Hoàn Tất & Lưu Biên Bản Kiểm Tra'}
                   </button>
+                </div>
+              )}
+
+              {/* Hộp thoại xác nhận trước khi xóa mục nhỏ */}
+              {confirmDeleteItem && isAdmin && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center glass-modal-backdrop p-4">
+                  <div className="glass-panel max-w-md w-full rounded-3xl p-6 space-y-4 text-slate-900">
+                    <div className="flex items-center gap-2 text-rose-600">
+                      <Trash2 className="w-5 h-5 shrink-0" />
+                      <h4 className="text-base sm:text-lg font-bold">
+                        Xác nhận xóa mục nhỏ?
+                      </h4>
+                    </div>
+                    <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
+                      Bạn có chắc chắn muốn xóa mục{' '}
+                      <strong className="text-slate-900">&ldquo;{confirmDeleteItem.title}&rdquo;</strong>?
+                      <br />
+                      <span className="text-xs text-slate-600">
+                        (Nếu mục này đã có kết quả chấm trong lịch sử kiểm tra, hệ thống sẽ tự động ẩn để giữ nguyên lịch sử; nếu chưa có lịch sử sẽ xóa hẳn.)
+                      </span>
+                    </p>
+                    <div className="flex items-center justify-end gap-2.5 pt-2">
+                      <button
+                        type="button"
+                        disabled={deletingItem}
+                        onClick={() => setConfirmDeleteItem(null)}
+                        className="min-h-[44px] px-4 rounded-xl glass-tool text-xs sm:text-sm font-bold"
+                      >
+                        Hủy
+                      </button>
+                      <button
+                        type="button"
+                        disabled={deletingItem}
+                        onClick={handleConfirmDeleteItem}
+                        className="min-h-[44px] px-5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs sm:text-sm font-bold disabled:opacity-50"
+                      >
+                        {deletingItem ? 'Đang xử lý...' : 'Xác nhận xóa'}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
