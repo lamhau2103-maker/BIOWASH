@@ -1,0 +1,440 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --accent-primary: #007AFF;
+  --accent-secondary: #38bdf8;
+  --accent-glow: rgba(0, 122, 255, 0.38);
+  --glass-blur: 36px;
+  --glass-alpha: 0.24;
+  --glass-scrim: rgba(255, 255, 255, 0.14);
+  --base-font-size: 16px;
+  --ui-gap: 1.125rem;
+  --ui-card-pad: 1.25rem;
+}
+
+@layer base {
+  html {
+    font-size: var(--base-font-size, 16px);
+    -webkit-text-size-adjust: 100%;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Be Vietnam Pro', system-ui, sans-serif;
+    min-height: 100dvh;
+    overflow-x: hidden;
+    color: #0f172a;
+    letter-spacing: -0.011em;
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.55);
+  }
+
+  .dark body {
+    color: #0f172a;
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.55);
+  }
+
+  select option {
+    background-color: rgba(255, 255, 255, 0.96);
+    color: #0f172a;
+  }
+
+  .font-mono,
+  .tabular-nums {
+    font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Apple iOS 18 / iPadOS / visionOS Silk Translucent Dynamic Wallpaper Mesh */
+.biowash-mesh-bg {
+  min-height: 100dvh;
+  color: #0f172a;
+  background-color: #cfe8ff;
+  background-image:
+    radial-gradient(at 6% 8%, rgba(255, 255, 255, 0.92) 0px, transparent 48%),
+    radial-gradient(at 92% 10%, rgba(147, 197, 253, 0.85) 0px, transparent 52%),
+    radial-gradient(at 52% 38%, rgba(255, 255, 255, 0.76) 0px, transparent 56%),
+    radial-gradient(at 15% 84%, rgba(103, 232, 249, 0.72) 0px, transparent 52%),
+    radial-gradient(at 86% 86%, rgba(165, 180, 252, 0.68) 0px, transparent 54%),
+    linear-gradient(135deg, #c3e4ff 0%, #e6f4ff 36%, #bae6fd 70%, #d8e6ff 100%);
+  background-attachment: fixed;
+}
+
+html:not(.dark) .biowash-mesh-bg {
+  color: #0f172a;
+  background-color: #d4ecff;
+  background-image:
+    radial-gradient(at 8% 10%, rgba(255, 255, 255, 0.94) 0px, transparent 50%),
+    radial-gradient(at 90% 12%, rgba(147, 197, 253, 0.86) 0px, transparent 54%),
+    radial-gradient(at 48% 46%, rgba(255, 255, 255, 0.80) 0px, transparent 58%),
+    radial-gradient(at 18% 85%, rgba(103, 232, 249, 0.74) 0px, transparent 52%),
+    radial-gradient(at 85% 84%, rgba(165, 180, 252, 0.70) 0px, transparent 54%),
+    linear-gradient(135deg, #c7e6ff 0%, #eaf6ff 42%, #bae6fd 74%, #dbeafe 100%);
+  background-attachment: fixed;
+}
+
+@keyframes floatSlow {
+  0%,
+  100% {
+    transform: translate3d(0px, 0px, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(24px, -20px, 0) scale(1.06);
+  }
+}
+
+@keyframes pulseSoft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.62;
+  }
+}
+
+.animate-float-slow {
+  animation: floatSlow 14s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+.animate-pulse-soft {
+  animation: pulseSoft 2.2s ease-in-out infinite;
+}
+
+/* Disable heavy animations & blobs in power-saving mode or prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  .animate-float-slow,
+  .animate-pulse-soft {
+    animation: none !important;
+  }
+}
+
+.power-saving-mode .animate-float-slow,
+.power-saving-mode .animate-pulse-soft,
+.power-saving-mode .mesh-blob {
+  animation: none !important;
+  display: none !important;
+}
+
+/* Apple iOS / visionOS Ultra-Thin Frosted Glass Material (.glass-card) */
+.glass-card {
+  position: relative;
+  border-radius: 26px;
+  backdrop-filter: blur(calc(var(--glass-blur, 32px) + 6px)) saturate(210%) brightness(1.06);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 32px) + 6px)) saturate(210%) brightness(1.06);
+  background:
+    linear-gradient(
+      145deg,
+      rgba(255, 255, 255, calc(var(--glass-alpha, 0.24) + 0.12)) 0%,
+      rgba(255, 255, 255, var(--glass-alpha, 0.24)) 55%,
+      rgba(255, 255, 255, calc(var(--glass-alpha, 0.24) - 0.04)) 100%
+    );
+  border-top: 1px solid rgba(255, 255, 255, 0.92);
+  border-left: 1px solid rgba(255, 255, 255, 0.78);
+  border-right: 1px solid rgba(255, 255, 255, 0.45);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.36);
+  box-shadow:
+    0 18px 40px -12px rgba(15, 23, 42, 0.11),
+    0 4px 14px -2px rgba(15, 23, 42, 0.05),
+    inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.94),
+    inset 1px 0 1px 0 rgba(255, 255, 255, 0.65),
+    inset 0 -1px 3px 0 rgba(255, 255, 255, 0.28);
+  color: #0f172a;
+  will-change: transform, backdrop-filter;
+  transition:
+    transform 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+    backdrop-filter 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+    -webkit-backdrop-filter 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+    background 0.38s ease,
+    border-color 0.38s ease;
+}
+
+.glass-card:hover {
+  transform: translateY(-2px) scale(1.003);
+  background:
+    linear-gradient(
+      145deg,
+      rgba(255, 255, 255, calc(var(--glass-alpha, 0.24) + 0.18)) 0%,
+      rgba(255, 255, 255, calc(var(--glass-alpha, 0.24) + 0.04)) 55%,
+      rgba(255, 255, 255, var(--glass-alpha, 0.24)) 100%
+    );
+  box-shadow:
+    0 24px 48px -12px rgba(15, 23, 42, 0.14),
+    0 8px 20px -4px rgba(0, 122, 255, 0.08),
+    inset 0 1.5px 2px 0 rgba(255, 255, 255, 0.98),
+    inset 1px 0 1.5px 0 rgba(255, 255, 255, 0.72),
+    inset 0 -1px 3px 0 rgba(255, 255, 255, 0.34);
+}
+
+.dark .glass-card {
+  background:
+    linear-gradient(
+      145deg,
+      rgba(255, 255, 255, calc(var(--glass-alpha, 0.24) + 0.12)) 0%,
+      rgba(255, 255, 255, var(--glass-alpha, 0.24)) 55%,
+      rgba(255, 255, 255, calc(var(--glass-alpha, 0.24) - 0.04)) 100%
+    );
+  border-top: 1px solid rgba(255, 255, 255, 0.92);
+  border-left: 1px solid rgba(255, 255, 255, 0.78);
+  border-right: 1px solid rgba(255, 255, 255, 0.45);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.36);
+  color: #0f172a;
+}
+
+/* Apple iOS Navigation / Control Center / Sheet Frosted Material (.glass-panel) */
+.glass-panel {
+  border-radius: 28px;
+  backdrop-filter: blur(calc(var(--glass-blur, 32px) + 12px)) saturate(220%) brightness(1.07);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 32px) + 12px)) saturate(220%) brightness(1.07);
+  background:
+    linear-gradient(
+      145deg,
+      rgba(255, 255, 255, calc(var(--glass-alpha, 0.24) + 0.16)) 0%,
+      rgba(255, 255, 255, calc(var(--glass-alpha, 0.24) + 0.04)) 52%,
+      rgba(255, 255, 255, var(--glass-alpha, 0.24)) 100%
+    );
+  border-top: 1px solid rgba(255, 255, 255, 0.95);
+  border-left: 1px solid rgba(255, 255, 255, 0.84);
+  border-right: 1px solid rgba(255, 255, 255, 0.50);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.42);
+  box-shadow:
+    0 24px 52px -12px rgba(15, 23, 42, 0.14),
+    0 8px 22px -4px rgba(15, 23, 42, 0.06),
+    inset 0 1.5px 2px 0 rgba(255, 255, 255, 0.96),
+    inset 0 -1.5px 4px 0 rgba(255, 255, 255, 0.32);
+  color: #0f172a;
+  will-change: transform, backdrop-filter;
+  transition:
+    transform 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+    backdrop-filter 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+    -webkit-backdrop-filter 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+    background 0.38s ease;
+}
+
+/* Bright Luminous Apple iOS Modal Backdrop & Sheet Surface (Identical Tone to Login Screen) */
+.glass-modal-backdrop {
+  background-color: rgba(212, 236, 255, 0.65);
+  background-image:
+    radial-gradient(at 12% 14%, rgba(255, 255, 255, 0.88) 0px, transparent 50%),
+    radial-gradient(at 88% 16%, rgba(147, 197, 253, 0.72) 0px, transparent 54%),
+    radial-gradient(at 50% 50%, rgba(255, 255, 255, 0.68) 0px, transparent 58%),
+    radial-gradient(at 20% 85%, rgba(103, 232, 249, 0.62) 0px, transparent 52%),
+    linear-gradient(135deg, rgba(199, 230, 255, 0.76) 0%, rgba(234, 246, 255, 0.82) 48%, rgba(186, 230, 253, 0.76) 100%);
+  backdrop-filter: blur(28px) saturate(200%) brightness(1.04);
+  -webkit-backdrop-filter: blur(28px) saturate(200%) brightness(1.04);
+}
+
+.glass-modal-backdrop > .glass-panel {
+  background:
+    linear-gradient(
+      145deg,
+      rgba(255, 255, 255, 0.72) 0%,
+      rgba(255, 255, 255, 0.54) 55%,
+      rgba(255, 255, 255, 0.46) 100%
+    );
+  border-top: 1.5px solid rgba(255, 255, 255, 0.96);
+  border-left: 1px solid rgba(255, 255, 255, 0.88);
+  border-right: 1px solid rgba(255, 255, 255, 0.65);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.58);
+  box-shadow:
+    0 28px 60px -12px rgba(15, 23, 42, 0.16),
+    0 10px 26px -6px rgba(0, 122, 255, 0.10),
+    inset 0 2px 3px 0 rgba(255, 255, 255, 0.98);
+}
+
+/* High contrast mode for intense direct sunlight */
+.high-contrast-glass .glass-card,
+.high-contrast-glass .glass-panel {
+  border-color: rgba(0, 122, 255, 0.55) !important;
+  background: rgba(255, 255, 255, 0.82) !important;
+}
+
+/* Apple iOS System Blue (#007AFF) Translucent Pill / Button (.btn-accent) */
+.btn-accent {
+  background: linear-gradient(
+    180deg,
+    #1A8CFF 0%,
+    var(--accent-primary, #007AFF) 100%
+  );
+  color: #ffffff !important;
+  text-shadow: 0 1px 1px rgba(0, 55, 130, 0.28);
+  box-shadow:
+    0 8px 20px -4px rgba(0, 122, 255, 0.42),
+    0 2px 6px -1px rgba(0, 122, 255, 0.25),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.62),
+    inset 0 -1px 2px 0 rgba(0, 75, 165, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.68);
+  backdrop-filter: blur(20px) saturate(190%);
+  -webkit-backdrop-filter: blur(20px) saturate(190%);
+  transition: all 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.btn-accent * {
+  color: #ffffff !important;
+}
+
+.btn-accent:hover {
+  filter: brightness(1.05);
+  transform: translateY(-1px) scale(1.01);
+  box-shadow:
+    0 12px 26px -4px rgba(0, 122, 255, 0.5),
+    0 4px 10px -2px rgba(0, 122, 255, 0.3),
+    inset 0 1.5px 2px 0 rgba(255, 255, 255, 0.75);
+}
+
+.btn-accent:active {
+  transform: scale(0.98);
+}
+
+/* Apple iOS Segmented Control / Input Field Translucent Material (.glass-tool) */
+.glass-tool {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.52) 0%,
+    rgba(255, 255, 255, 0.34) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.84);
+  box-shadow:
+    0 4px 12px -2px rgba(15, 23, 42, 0.06),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(24px) saturate(200%);
+  -webkit-backdrop-filter: blur(24px) saturate(200%);
+  color: #0f172a !important;
+  transition: all 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.glass-tool::placeholder {
+  color: #475569 !important;
+}
+
+.glass-tool:hover {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.68) 0%,
+    rgba(255, 255, 255, 0.48) 100%
+  );
+  border-color: rgba(255, 255, 255, 0.96);
+  transform: translateY(-0.5px);
+}
+
+/* High-Contrast Apple iOS Vibrancy Label Hierarchy on Translucent Glass */
+.biowash-mesh-bg .text-white:not(.btn-accent):not([class*="bg-teal-6"]):not([class*="bg-emerald-6"]):not([class*="bg-rose-6"]):not([class*="bg-amber-6"]):not([class*="bg-cyan-6"]):not([class*="bg-sky-6"]):not([class*="bg-blue-6"]),
+.biowash-mesh-bg .dark\:text-white:not(.btn-accent):not([class*="bg-teal-6"]):not([class*="bg-emerald-6"]):not([class*="bg-rose-6"]):not([class*="bg-amber-6"]):not([class*="bg-cyan-6"]):not([class*="bg-sky-6"]):not([class*="bg-blue-6"]) {
+  color: #0f172a !important;
+}
+
+.biowash-mesh-bg .text-white\/95:not(.btn-accent),
+.biowash-mesh-bg .text-white\/90:not(.btn-accent) {
+  color: #0f172a !important;
+}
+
+.biowash-mesh-bg .text-white\/85:not(.btn-accent),
+.biowash-mesh-bg .text-white\/80:not(.btn-accent),
+.biowash-mesh-bg .text-white\/75:not(.btn-accent),
+.biowash-mesh-bg .text-white\/70:not(.btn-accent),
+.biowash-mesh-bg .text-white\/60:not(.btn-accent) {
+  color: #1e293b !important;
+}
+
+.biowash-mesh-bg .text-teal-200,
+.biowash-mesh-bg .text-teal-300,
+.biowash-mesh-bg .dark\:text-teal-300 {
+  color: #007AFF !important;
+}
+
+.biowash-mesh-bg .text-cyan-100,
+.biowash-mesh-bg .text-cyan-200,
+.biowash-mesh-bg .text-cyan-300,
+.biowash-mesh-bg .text-sky-100,
+.biowash-mesh-bg .text-sky-200,
+.biowash-mesh-bg .text-sky-300 {
+  color: #0062CC !important;
+}
+
+.biowash-mesh-bg .text-emerald-100,
+.biowash-mesh-bg .text-emerald-200,
+.biowash-mesh-bg .text-emerald-300 {
+  color: #059669 !important;
+}
+
+.biowash-mesh-bg .text-amber-100,
+.biowash-mesh-bg .text-amber-200,
+.biowash-mesh-bg .text-amber-300 {
+  color: #d97706 !important;
+}
+
+.biowash-mesh-bg .text-rose-100,
+.biowash-mesh-bg .text-rose-200,
+.biowash-mesh-bg .text-rose-300 {
+  color: #e11d48 !important;
+}
+
+.biowash-mesh-bg .placeholder\:text-white\/80::placeholder,
+.biowash-mesh-bg .placeholder\:text-white\/70::placeholder,
+.biowash-mesh-bg .placeholder\:text-white\/60::placeholder {
+  color: #475569 !important;
+}
+
+/* Apple iOS Status Glows: iOS Green, iOS Amber, iOS Coral Red */
+.glow-pass {
+  border-color: rgba(52, 199, 89, 0.55) !important;
+  box-shadow:
+    0 12px 32px -6px rgba(52, 199, 89, 0.22),
+    inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.92) !important;
+}
+
+.glow-warn {
+  border-color: rgba(255, 149, 0, 0.58) !important;
+  box-shadow:
+    0 12px 32px -6px rgba(255, 149, 0, 0.24),
+    inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.92) !important;
+}
+
+.glow-fail {
+  border-color: rgba(255, 59, 48, 0.62) !important;
+  box-shadow:
+    0 12px 32px -6px rgba(255, 59, 48, 0.28),
+    inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.92) !important;
+}
+
+/* Fluid Typography & Spacing with clamp() */
+.fluid-title {
+  font-size: clamp(1.125rem, 1.8vw, 1.5rem);
+  line-height: 1.25;
+  letter-spacing: -0.018em;
+}
+
+.fluid-kpi {
+  font-size: clamp(1.5rem, 2.4vw, 2.15rem);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.density-gap {
+  gap: var(--ui-gap, 1.125rem);
+}
+
+.density-pad {
+  padding: var(--ui-card-pad, 1.25rem);
+}
+
+/* Safe area padding for mobile floating dock */
+.pb-safe-dock {
+  padding-bottom: calc(5.75rem + env(safe-area-inset-bottom, 0px));
+}
+
+.dock-safe-bottom {
+  bottom: calc(0.65rem + env(safe-area-inset-bottom, 0px));
+}
+
+/* Custom Leaflet container styling */
+.leaflet-container {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Be Vietnam Pro', sans-serif !important;
+  border-radius: 1.25rem;
+  z-index: 10;
+}

@@ -1,0 +1,6 @@
+{
+  "name": "BIO-WASH CHECK – Checklist Điểm Rửa Xe Sát Khuẩn",
+  "description": "Ứng dụng quản lý, kiểm tra an toàn sinh học và quy trình rửa xe sát khuẩn tại trại chăn nuôi, nhà máy cám và trạm trung chuyển.",
+  "requestFramePermissions": ["camera", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
