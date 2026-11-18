@@ -23,6 +23,8 @@ import {
   CheckCircle2,
   ClipboardCheck,
   ClipboardList,
+  CloudUpload,
+  Database,
   Eye,
   FlaskConical,
   LayoutGrid,
@@ -82,6 +84,9 @@ interface DashboardViewProps {
   onOpenManageItems: (site: Site) => void;
   onRefresh: () => void;
   onShowToast: (msg: string) => void;
+  onSyncLegacyData?: () => void;
+  isSyncingLegacy?: boolean;
+  onOpenSqlModal?: () => void;
 }
 
 type PeriodFilter = 'today' | '7d' | '30d' | 'quarter' | 'custom';
@@ -125,6 +130,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenManageItems,
   onRefresh,
   onShowToast,
+  onSyncLegacyData,
+  isSyncingLegacy,
+  onOpenSqlModal,
 }) => {
   const activeSites = useMemo(() => sites.filter((s) => s.is_active), [sites]);
 
@@ -630,16 +638,43 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           Chào mừng đến với BIO-WASH CHECK
         </h2>
         <p className="text-sm text-white/80 max-w-md mx-auto">
-          Hệ thống chưa có điểm rửa xe sát khuẩn nào. Hãy thêm điểm rửa xe đầu tiên để bắt đầu giám sát An Toàn Sinh Học thời gian thực.
+          Hệ thống đang đọc trực tiếp từ cơ sở dữ liệu Supabase. Hãy thêm điểm rửa xe đầu tiên hoặc đồng bộ dữ liệu cũ từ trình duyệt lên Supabase.
         </p>
-        <button
-          type="button"
-          onClick={onOpenManageSites}
-          className="min-h-[52px] px-6 rounded-2xl btn-accent font-bold text-sm inline-flex items-center gap-2"
-        >
-          <Plus className="w-5 h-5" />
-          <span>Thêm điểm rửa xe đầu tiên</span>
-        </button>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <button
+            type="button"
+            onClick={onOpenManageSites}
+            className="min-h-[50px] px-5 rounded-2xl btn-accent font-bold text-sm inline-flex items-center gap-2"
+          >
+            <Plus className="w-5 h-5" />
+            <span>Thêm điểm rửa xe đầu tiên</span>
+          </button>
+          {onSyncLegacyData && (
+            <button
+              type="button"
+              onClick={onSyncLegacyData}
+              disabled={isSyncingLegacy}
+              className="min-h-[50px] px-5 rounded-2xl glass-tool font-bold text-sm inline-flex items-center gap-2 disabled:opacity-50"
+            >
+              <CloudUpload className="w-5 h-5" />
+              <span>
+                {isSyncingLegacy
+                  ? 'Đang đồng bộ lên Supabase...'
+                  : 'Đồng bộ dữ liệu cũ lên Supabase'}
+              </span>
+            </button>
+          )}
+          {onOpenSqlModal && (
+            <button
+              type="button"
+              onClick={onOpenSqlModal}
+              className="min-h-[50px] px-4 rounded-2xl glass-tool font-bold text-sm inline-flex items-center gap-2"
+            >
+              <Database className="w-4 h-4" />
+              <span>SQL & Policy RLS Supabase</span>
+            </button>
+          )}
+        </div>
       </div>
     );
   }
@@ -691,37 +726,32 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       }
 
       case 'kpi_strip': {
-        // Adaptive KPI Layout:
-        // - Mobile (<640px): Horizontal snap carousel
-        // - Tablet (640-1024px): 3x2 grid
-        // - Desktop (>1024px): 1 row of 6 columns
-        const containerClass =
-          deviceType === 'mobile'
-            ? 'flex overflow-x-auto snap-x snap-mandatory gap-3 pb-2 -mx-1 px-1'
-            : deviceType === 'tablet'
-            ? 'grid grid-cols-3 gap-3.5'
-            : 'grid grid-cols-6 gap-3.5';
-
-        const cardMinWidth =
-          deviceType === 'mobile' ? 'min-w-[265px] snap-center shrink-0' : 'min-w-0';
-
+        // Balanced Responsive KPI Grid across Laptop, Tablet/iPad, and Mobile:
+        // - Mobile (<640px): 1-2 col adaptive grid (no clipped text)
+        // - Tablet & Laptop (640px - 1535px): 2 or 3 columns x 2 rows so cards have generous horizontal breathing room
+        // - Large Desktop (>=1536px): 6 columns
         return (
           <div key={wConfig.id} className={spanClass}>
-            <div className={containerClass}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-3.5">
               {/* KPI 1 */}
               <button
                 type="button"
                 onClick={() => setKpiDrilldown('inspections')}
-                className={`glass-card density-pad text-left hover:scale-[1.01] active:scale-[0.99] transition flex items-center justify-between gap-3 ${cardMinWidth}`}
+                className="glass-card p-4 text-left hover:scale-[1.01] active:scale-[0.99] transition flex flex-col justify-between gap-2.5 min-h-[122px] min-w-0"
               >
-                <div className="space-y-1 min-w-0">
-                  <span className="text-xs font-semibold text-white/80 block truncate">
+                <div className="flex items-start justify-between gap-2 w-full">
+                  <span className="text-xs sm:text-[13px] font-bold text-white leading-snug">
                     1. Lượt kiểm tra
                   </span>
-                  <div className="fluid-kpi font-bold font-mono text-white">
+                  <div className="w-9 h-9 rounded-xl bg-white/35 border border-white/60 flex items-center justify-center text-teal-300 shrink-0">
+                    <ClipboardList className="w-4 h-4" />
+                  </div>
+                </div>
+                <div className="space-y-1 min-w-0 w-full">
+                  <div className="text-2xl xl:text-[26px] leading-none font-bold font-mono text-white">
                     <AnimatedCounter value={kpiStats.totalInsp} />
                   </div>
-                  <div className="flex items-center gap-1 text-[11px] font-semibold">
+                  <div className="flex items-center gap-1 text-[11px] font-semibold flex-wrap">
                     {kpiStats.inspDeltaPct >= 0 ? (
                       <ArrowUpRight className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
                     ) : (
@@ -736,11 +766,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         ? `+${kpiStats.inspDeltaPct}%`
                         : `${kpiStats.inspDeltaPct}%`}
                     </span>
-                    <span className="text-white/70 truncate">kỳ trước</span>
+                    <span className="text-white/80">so với kỳ trước</span>
                   </div>
-                </div>
-                <div className="w-10 h-10 rounded-2xl bg-white/15 flex items-center justify-center text-teal-300 shrink-0">
-                  <ClipboardList className="w-5 h-5" />
                 </div>
               </button>
 
@@ -748,48 +775,54 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <button
                 type="button"
                 onClick={() => setKpiDrilldown('compliance')}
-                className={`glass-card density-pad text-left hover:scale-[1.01] active:scale-[0.99] transition flex items-center justify-between gap-2 ${cardMinWidth}`}
+                className="glass-card p-4 text-left hover:scale-[1.01] active:scale-[0.99] transition flex flex-col justify-between gap-2 min-h-[122px] min-w-0"
               >
-                <div className="space-y-1 min-w-0">
-                  <span className="text-xs font-semibold text-white/80 block truncate">
+                <div className="flex items-center justify-between gap-2 w-full">
+                  <span className="text-xs sm:text-[13px] font-bold text-white leading-snug">
                     2. Tuân thủ TB
                   </span>
-                  <div className="fluid-kpi font-bold font-mono text-white">
-                    <AnimatedCounter value={kpiStats.avgCompliance} decimals={1} suffix="%" />
-                  </div>
-                  <span className="text-[11px] text-white/75 block truncate">
+                  <span className="text-[11px] font-semibold text-white/85 px-2 py-0.5 rounded-lg bg-white/30 border border-white/50 shrink-0">
                     Chuẩn ≥{settings.thresholdGood}%
                   </span>
                 </div>
-                <CircularGauge
-                  percentage={kpiStats.avgCompliance}
-                  size={56}
-                  strokeWidth={6}
-                  thresholdGood={settings.thresholdGood}
-                  thresholdWarn={settings.thresholdWarning}
-                />
+                <div className="flex items-center justify-between gap-2 w-full pt-0.5">
+                  <div className="text-2xl xl:text-[26px] leading-none font-bold font-mono text-white shrink-0">
+                    <AnimatedCounter value={kpiStats.avgCompliance} decimals={1} suffix="%" />
+                  </div>
+                  <div className="shrink-0">
+                    <CircularGauge
+                      percentage={kpiStats.avgCompliance}
+                      size={48}
+                      strokeWidth={5}
+                      thresholdGood={settings.thresholdGood}
+                      thresholdWarn={settings.thresholdWarning}
+                    />
+                  </div>
+                </div>
               </button>
 
               {/* KPI 3 */}
               <button
                 type="button"
                 onClick={() => setKpiDrilldown('vehicles')}
-                className={`glass-card density-pad text-left hover:scale-[1.01] active:scale-[0.99] transition flex items-center justify-between gap-3 ${cardMinWidth}`}
+                className="glass-card p-4 text-left hover:scale-[1.01] active:scale-[0.99] transition flex flex-col justify-between gap-2.5 min-h-[122px] min-w-0"
               >
-                <div className="space-y-1 min-w-0">
-                  <span className="text-xs font-semibold text-white/80 block truncate">
+                <div className="flex items-start justify-between gap-2 w-full">
+                  <span className="text-xs sm:text-[13px] font-bold text-white leading-snug">
                     3. Xe đã xử lý
                   </span>
-                  <div className="fluid-kpi font-bold font-mono text-white">
+                  <div className="w-9 h-9 rounded-xl bg-white/35 border border-white/60 flex items-center justify-center text-cyan-300 shrink-0">
+                    <Truck className="w-4 h-4" />
+                  </div>
+                </div>
+                <div className="space-y-1 min-w-0 w-full">
+                  <div className="text-2xl xl:text-[26px] leading-none font-bold font-mono text-white">
                     <AnimatedCounter value={kpiStats.totalWashes} />
                   </div>
-                  <p className="text-[11px] text-white/80 truncate">
+                  <p className="text-[11px] text-white/85">
                     Đạt: <strong className="text-emerald-300">{kpiStats.passWashes}</strong> · Lần
                     đầu: <strong>{kpiStats.firstPassRate}%</strong>
                   </p>
-                </div>
-                <div className="w-10 h-10 rounded-2xl bg-white/15 flex items-center justify-center text-cyan-300 shrink-0">
-                  <Truck className="w-5 h-5" />
                 </div>
               </button>
 
@@ -797,31 +830,33 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <button
                 type="button"
                 onClick={() => onNavigateTab('actions')}
-                className={`glass-card density-pad text-left hover:scale-[1.01] active:scale-[0.99] transition flex items-center justify-between gap-3 ${cardMinWidth} ${
+                className={`glass-card p-4 text-left hover:scale-[1.01] active:scale-[0.99] transition flex flex-col justify-between gap-2.5 min-h-[122px] min-w-0 ${
                   kpiStats.overdueActionList.length > 0 ? 'glow-fail' : ''
                 }`}
               >
-                <div className="space-y-1 min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-semibold text-white/80 truncate">
+                <div className="flex items-start justify-between gap-2 w-full">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-xs sm:text-[13px] font-bold text-white leading-snug">
                       4. Lỗi đang mở
                     </span>
                     {kpiStats.overdueActionList.length > 0 && (
                       <span className="text-[10px] font-bold text-rose-300 animate-pulse-soft shrink-0">
-                        {kpiStats.overdueActionList.length} trễ!
+                        ({kpiStats.overdueActionList.length} trễ!)
                       </span>
                     )}
                   </div>
-                  <div className="fluid-kpi font-bold font-mono text-rose-300">
+                  <div className="w-9 h-9 rounded-xl bg-rose-500/20 border border-rose-300/50 flex items-center justify-center text-rose-300 shrink-0">
+                    <AlertTriangle className="w-4 h-4" />
+                  </div>
+                </div>
+                <div className="space-y-1 min-w-0 w-full">
+                  <div className="text-2xl xl:text-[26px] leading-none font-bold font-mono text-rose-300">
                     <AnimatedCounter value={kpiStats.openActionsCount} />
                   </div>
-                  <p className="text-[11px] text-white/80 truncate">
+                  <p className="text-[11px] text-white/85">
                     Cao: <strong>{kpiStats.highRiskCount}</strong> · N.Trọng:{' '}
                     <strong>{kpiStats.criticalCount}</strong>
                   </p>
-                </div>
-                <div className="w-10 h-10 rounded-2xl bg-rose-500/25 flex items-center justify-center text-rose-300 shrink-0">
-                  <AlertTriangle className="w-5 h-5" />
                 </div>
               </button>
 
@@ -829,21 +864,23 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <button
                 type="button"
                 onClick={() => setKpiDrilldown('overdue_sites')}
-                className={`glass-card density-pad text-left hover:scale-[1.01] active:scale-[0.99] transition flex items-center justify-between gap-3 ${cardMinWidth}`}
+                className="glass-card p-4 text-left hover:scale-[1.01] active:scale-[0.99] transition flex flex-col justify-between gap-2.5 min-h-[122px] min-w-0"
               >
-                <div className="space-y-1 min-w-0">
-                  <span className="text-xs font-semibold text-white/80 block truncate">
+                <div className="flex items-start justify-between gap-2 w-full">
+                  <span className="text-xs sm:text-[13px] font-bold text-white leading-snug">
                     5. Điểm quá hạn KT
                   </span>
-                  <div className="fluid-kpi font-bold font-mono text-amber-300">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-300/50 flex items-center justify-center text-amber-300 shrink-0">
+                    <CalendarClock className="w-4 h-4" />
+                  </div>
+                </div>
+                <div className="space-y-1 min-w-0 w-full">
+                  <div className="text-2xl xl:text-[26px] leading-none font-bold font-mono text-amber-300">
                     <AnimatedCounter value={kpiStats.overdueSites.length} />
                   </div>
-                  <span className="text-[11px] text-white/75 block truncate">
+                  <span className="text-[11px] text-white/85 block">
                     Theo chu kỳ từng điểm
                   </span>
-                </div>
-                <div className="w-10 h-10 rounded-2xl bg-amber-500/25 flex items-center justify-center text-amber-300 shrink-0">
-                  <CalendarClock className="w-5 h-5" />
                 </div>
               </button>
 
@@ -851,21 +888,23 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <button
                 type="button"
                 onClick={() => setKpiDrilldown('expiring_chem')}
-                className={`glass-card density-pad text-left hover:scale-[1.01] active:scale-[0.99] transition flex items-center justify-between gap-3 ${cardMinWidth}`}
+                className="glass-card p-4 text-left hover:scale-[1.01] active:scale-[0.99] transition flex flex-col justify-between gap-2.5 min-h-[122px] min-w-0"
               >
-                <div className="space-y-1 min-w-0">
-                  <span className="text-xs font-semibold text-white/80 block truncate">
+                <div className="flex items-start justify-between gap-2 w-full">
+                  <span className="text-xs sm:text-[13px] font-bold text-white leading-snug">
                     6. Dung dịch hết hạn
                   </span>
-                  <div className="fluid-kpi font-bold font-mono text-sky-100">
+                  <div className="w-9 h-9 rounded-xl bg-white/35 border border-white/60 flex items-center justify-center text-white shrink-0">
+                    <FlaskConical className="w-4 h-4" />
+                  </div>
+                </div>
+                <div className="space-y-1 min-w-0 w-full">
+                  <div className="text-2xl xl:text-[26px] leading-none font-bold font-mono text-sky-100">
                     <AnimatedCounter value={kpiStats.expiringChemSites.length} />
                   </div>
-                  <span className="text-[11px] text-white/75 block truncate">
+                  <span className="text-[11px] text-white/85 block">
                     Cảnh báo thay hóa chất
                   </span>
-                </div>
-                <div className="w-10 h-10 rounded-2xl bg-white/25 border border-white/40 flex items-center justify-center text-white shrink-0">
-                  <FlaskConical className="w-5 h-5" />
                 </div>
               </button>
             </div>
@@ -1876,6 +1915,23 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             >
               <Plus className="w-3.5 h-3.5" />
               <span>Quản lý điểm</span>
+            </button>
+          )}
+
+          {onSyncLegacyData && (
+            <button
+              type="button"
+              onClick={onSyncLegacyData}
+              disabled={isSyncingLegacy}
+              className="min-h-[42px] px-3.5 rounded-xl glass-tool text-xs font-bold flex items-center gap-1.5 whitespace-nowrap shrink-0 disabled:opacity-50"
+              title="Đẩy toàn bộ dữ liệu cũ trong trình duyệt lên các bảng Supabase"
+            >
+              <CloudUpload className="w-3.5 h-3.5" />
+              <span>
+                {isSyncingLegacy
+                  ? 'Đang đồng bộ...'
+                  : 'Đồng bộ dữ liệu cũ lên Supabase'}
+              </span>
             </button>
           )}
         </div>

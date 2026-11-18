@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { enqueueOfflineMutation } from './offlineQueue';
+import { enqueueOfflineMutation, flushOfflineQueue } from './offlineQueue';
 import {
   ChecklistItem,
   CorrectiveAction,
@@ -13,84 +13,435 @@ import {
   VehicleWash,
 } from '../types/database';
 
-interface AdminOverlayState {
-  sitesCreated: Site[];
-  sitesUpdated: Record<string, Partial<Site>>;
-  sitesDeleted: string[];
-  itemsCreated: ChecklistItem[];
-  itemsUpdated: Record<string, Partial<ChecklistItem>>;
-  itemsDeleted: string[];
-  inspectionsCreated: Inspection[];
-  inspectionsUpdated: Record<string, Partial<Inspection>>;
-  inspectionsDeleted: string[];
-  resultsUpserted: Record<string, InspectionResultRow>;
-  resultsDeletedByInspection: string[];
-  actionsCreated: CorrectiveAction[];
-  actionsUpdated: Record<string, Partial<CorrectiveAction>>;
-  actionsDeleted: string[];
-  washesCreated: VehicleWash[];
-  washesUpdated: Record<string, Partial<VehicleWash>>;
-  washesDeleted: string[];
+interface LegacyAdminOverlayState {
+  sitesCreated?: Site[];
+  sitesUpdated?: Record<string, Partial<Site>>;
+  sitesDeleted?: string[];
+  itemsCreated?: ChecklistItem[];
+  itemsUpdated?: Record<string, Partial<ChecklistItem>>;
+  itemsDeleted?: string[];
+  inspectionsCreated?: Inspection[];
+  inspectionsUpdated?: Record<string, Partial<Inspection>>;
+  inspectionsDeleted?: string[];
+  resultsUpserted?: Record<string, InspectionResultRow>;
+  resultsDeletedByInspection?: string[];
+  actionsCreated?: CorrectiveAction[];
+  actionsUpdated?: Record<string, Partial<CorrectiveAction>>;
+  actionsDeleted?: string[];
+  washesCreated?: VehicleWash[];
+  washesUpdated?: Record<string, Partial<VehicleWash>>;
+  washesDeleted?: string[];
 }
 
-const OVERLAY_STORAGE_KEY = 'biowash_superadmin_overlay_v1';
+const LEGACY_OVERLAY_KEY = 'biowash_superadmin_overlay_v1';
+const LEGACY_DIRECT_KEYS = [
+  'biowash_sites',
+  'biowash_checklist_items',
+  'biowash_inspections',
+  'biowash_inspection_results',
+  'biowash_corrective_actions',
+  'biowash_vehicle_washes',
+  'sites',
+  'checklist_items',
+  'inspections',
+  'inspection_results',
+  'corrective_actions',
+  'vehicle_washes',
+];
 
-function createEmptyOverlay(): AdminOverlayState {
-  return {
-    sitesCreated: [],
-    sitesUpdated: {},
-    sitesDeleted: [],
-    itemsCreated: [],
-    itemsUpdated: {},
-    itemsDeleted: [],
-    inspectionsCreated: [],
-    inspectionsUpdated: {},
-    inspectionsDeleted: [],
-    resultsUpserted: {},
-    resultsDeletedByInspection: [],
-    actionsCreated: [],
-    actionsUpdated: {},
-    actionsDeleted: [],
-    washesCreated: [],
-    washesUpdated: {},
-    washesDeleted: [],
-  };
-}
-
-function loadOverlay(): AdminOverlayState {
-  if (typeof window === 'undefined') return createEmptyOverlay();
+function readLegacyOverlay(): LegacyAdminOverlayState | null {
+  if (typeof window === 'undefined') return null;
   try {
-    const raw = window.localStorage.getItem(OVERLAY_STORAGE_KEY);
-    if (!raw) return createEmptyOverlay();
-    return { ...createEmptyOverlay(), ...JSON.parse(raw) };
+    const raw = window.localStorage.getItem(LEGACY_OVERLAY_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as LegacyAdminOverlayState;
   } catch {
-    return createEmptyOverlay();
+    return null;
   }
-}
-
-function saveOverlay(state: AdminOverlayState): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(OVERLAY_STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    // Ignore storage quota errors
-  }
-}
-
-const adminOverlay: AdminOverlayState = loadOverlay();
-
-function genUUID(): string {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID();
-  }
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
 }
 
 export const repository = {
+  // Check if browser has any legacy localStorage data waiting to be pushed to Supabase
+  hasLegacyLocalData(): boolean {
+    if (typeof window === 'undefined') return false;
+    try {
+      const overlay = readLegacyOverlay();
+      if (overlay) {
+        const hasOverlayItems =
+          (overlay.sitesCreated?.length || 0) > 0 ||
+          Object.keys(overlay.sitesUpdated || {}).length > 0 ||
+          (overlay.itemsCreated?.length || 0) > 0 ||
+          Object.keys(overlay.itemsUpdated || {}).length > 0 ||
+          (overlay.inspectionsCreated?.length || 0) > 0 ||
+          Object.keys(overlay.inspectionsUpdated || {}).length > 0 ||
+          Object.keys(overlay.resultsUpserted || {}).length > 0 ||
+          (overlay.actionsCreated?.length || 0) > 0 ||
+          Object.keys(overlay.actionsUpdated || {}).length > 0 ||
+          (overlay.washesCreated?.length || 0) > 0 ||
+          Object.keys(overlay.washesUpdated || {}).length > 0;
+        if (hasOverlayItems) return true;
+      }
+      for (const k of LEGACY_DIRECT_KEYS) {
+        const val = window.localStorage.getItem(k);
+        if (val && val !== '[]' && val !== '{}') return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  },
+
+  // Push all existing browser data (localStorage overlay + legacy keys + current snapshot + IndexedDB queue) to Supabase
+  async syncLegacyLocalDataToSupabase(currentSnapshot?: {
+    sites?: Site[];
+    checklistItems?: ChecklistItem[];
+    inspections?: Inspection[];
+    inspectionResults?: InspectionResultRow[];
+    correctiveActions?: CorrectiveAction[];
+    vehicleWashes?: VehicleWash[];
+  }): Promise<{ syncedCount: number; errors: string[] }> {
+    let syncedCount = 0;
+    const errors: string[] = [];
+
+    // 1. Flush IndexedDB offline queue first
+    try {
+      const queueFlushed = await flushOfflineQueue();
+      syncedCount += queueFlushed;
+    } catch (e) {
+      errors.push(e instanceof Error ? e.message : 'Lỗi đồng bộ hàng đợi ngoại tuyến');
+    }
+
+    const overlay = readLegacyOverlay();
+
+    // Helper to parse legacy array keys if any exist in localStorage
+    const readLegacyArray = <T>(keys: string[]): T[] => {
+      if (typeof window === 'undefined') return [];
+      const out: T[] = [];
+      for (const k of keys) {
+        try {
+          const raw = window.localStorage.getItem(k);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) out.push(...parsed);
+          }
+        } catch {
+          // ignore
+        }
+      }
+      return out;
+    };
+
+    // 2. Sync Sites (Created + Updated + Snapshot + Legacy keys)
+    const sitesToUpsert = new Map<string, Site>();
+    (currentSnapshot?.sites || []).forEach((s) => {
+      if (s?.id) sitesToUpsert.set(s.id, s);
+    });
+    readLegacyArray<Site>(['biowash_sites', 'sites']).forEach((s) => {
+      if (s?.id) sitesToUpsert.set(s.id, s);
+    });
+    (overlay?.sitesCreated || []).forEach((s) => {
+      if (s?.id) sitesToUpsert.set(s.id, s);
+    });
+    if (overlay?.sitesUpdated) {
+      for (const [siteId, patch] of Object.entries(overlay.sitesUpdated)) {
+        const existing = sitesToUpsert.get(siteId);
+        if (existing) {
+          sitesToUpsert.set(siteId, { ...existing, ...patch });
+        } else {
+          const { error } = await supabase.from('sites').update(patch).eq('id', siteId);
+          if (!error) syncedCount++;
+          else errors.push(`Cập nhật điểm rửa xe: ${error.message}`);
+        }
+      }
+    }
+
+    if (sitesToUpsert.size > 0) {
+      const rows = Array.from(sitesToUpsert.values()).map((s) => ({
+        id: s.id,
+        name: s.name,
+        site_type: s.site_type,
+        address: s.address ?? null,
+        lat: s.lat ?? null,
+        lng: s.lng ?? null,
+        manager_name: s.manager_name ?? null,
+        manager_phone: s.manager_phone ?? null,
+        inspect_cycle_days: s.inspect_cycle_days ?? 7,
+        is_active: s.is_active ?? true,
+      }));
+      const { error } = await supabase.from('sites').upsert(rows, { onConflict: 'id' });
+      if (!error) {
+        syncedCount += rows.length;
+      } else {
+        errors.push(`Đồng bộ bảng sites: ${error.message}`);
+      }
+    }
+
+    // Deletions for sites
+    if (overlay?.sitesDeleted?.length) {
+      for (const delSiteId of overlay.sitesDeleted) {
+        await supabase.from('sites').delete().eq('id', delSiteId);
+      }
+    }
+
+    // 3. Sync Checklist Items (Created + Updated + Snapshot + Legacy keys)
+    const itemsToUpsert = new Map<string, ChecklistItem>();
+    (currentSnapshot?.checklistItems || []).forEach((it) => {
+      if (it?.id) itemsToUpsert.set(it.id, it);
+    });
+    readLegacyArray<ChecklistItem>(['biowash_checklist_items', 'checklist_items']).forEach((it) => {
+      if (it?.id) itemsToUpsert.set(it.id, it);
+    });
+    (overlay?.itemsCreated || []).forEach((it) => {
+      if (it?.id) itemsToUpsert.set(it.id, it);
+    });
+    if (overlay?.itemsUpdated) {
+      for (const [itemId, patch] of Object.entries(overlay.itemsUpdated)) {
+        const existing = itemsToUpsert.get(itemId);
+        if (existing) {
+          itemsToUpsert.set(itemId, { ...existing, ...patch });
+        } else {
+          const { error } = await supabase.from('checklist_items').update(patch).eq('id', itemId);
+          if (!error) syncedCount++;
+          else errors.push(`Cập nhật hạng mục: ${error.message}`);
+        }
+      }
+    }
+
+    if (itemsToUpsert.size > 0) {
+      const rows = Array.from(itemsToUpsert.values()).map((it) => ({
+        id: it.id,
+        site_id: it.site_id,
+        group_name: it.group_name,
+        title: it.title,
+        is_critical: it.is_critical ?? false,
+        sort_order: it.sort_order ?? 1,
+        is_active: it.is_active ?? true,
+        current_status: it.current_status ?? 'pending',
+        current_severity: it.current_severity ?? null,
+        last_checked_at: it.last_checked_at ?? null,
+        last_checked_by: it.last_checked_by ?? null,
+        updated_at: it.updated_at ?? new Date().toISOString(),
+      }));
+      const { error } = await supabase.from('checklist_items').upsert(rows, { onConflict: 'id' });
+      if (!error) {
+        syncedCount += rows.length;
+      } else {
+        errors.push(`Đồng bộ bảng checklist_items: ${error.message}`);
+      }
+    }
+
+    if (overlay?.itemsDeleted?.length) {
+      for (const delItemId of overlay.itemsDeleted) {
+        await supabase.from('checklist_items').delete().eq('id', delItemId);
+      }
+    }
+
+    // 4. Sync Inspections
+    const inspectionsToUpsert = new Map<string, Inspection>();
+    (currentSnapshot?.inspections || []).forEach((ins) => {
+      if (ins?.id) inspectionsToUpsert.set(ins.id, ins);
+    });
+    readLegacyArray<Inspection>(['biowash_inspections', 'inspections']).forEach((ins) => {
+      if (ins?.id) inspectionsToUpsert.set(ins.id, ins);
+    });
+    (overlay?.inspectionsCreated || []).forEach((ins) => {
+      if (ins?.id) inspectionsToUpsert.set(ins.id, ins);
+    });
+    if (overlay?.inspectionsUpdated) {
+      for (const [inspId, patch] of Object.entries(overlay.inspectionsUpdated)) {
+        const existing = inspectionsToUpsert.get(inspId);
+        if (existing) {
+          inspectionsToUpsert.set(inspId, { ...existing, ...patch });
+        } else {
+          const { error } = await supabase.from('inspections').update(patch).eq('id', inspId);
+          if (!error) syncedCount++;
+          else errors.push(`Cập nhật phiên kiểm tra: ${error.message}`);
+        }
+      }
+    }
+
+    if (inspectionsToUpsert.size > 0) {
+      const rows = Array.from(inspectionsToUpsert.values()).map((ins) => ({
+        id: ins.id,
+        site_id: ins.site_id,
+        kind: ins.kind || 'dieu_kien',
+        inspector_id:
+          ins.inspector_id === '00000000-0000-0000-0000-000000000001'
+            ? null
+            : ins.inspector_id ?? null,
+        inspector_name: ins.inspector_name,
+        status: ins.status || 'draft',
+        score: ins.score ?? null,
+        result: ins.result ?? null,
+        signature_url: ins.signature_url ?? null,
+        gps: ins.gps ?? null,
+        started_at: ins.started_at || new Date().toISOString(),
+        finished_at: ins.finished_at ?? null,
+      }));
+      const { error } = await supabase.from('inspections').upsert(rows, { onConflict: 'id' });
+      if (!error) {
+        syncedCount += rows.length;
+      } else {
+        errors.push(`Đồng bộ bảng inspections: ${error.message}`);
+      }
+    }
+
+    // 5. Sync Inspection Results (including photo_urls)
+    const resultsToUpsert = new Map<string, InspectionResultRow>();
+    (currentSnapshot?.inspectionResults || []).forEach((r) => {
+      if (r?.inspection_id && r?.item_id) {
+        resultsToUpsert.set(`${r.inspection_id}_${r.item_id}`, r);
+      }
+    });
+    readLegacyArray<InspectionResultRow>([
+      'biowash_inspection_results',
+      'inspection_results',
+    ]).forEach((r) => {
+      if (r?.inspection_id && r?.item_id) {
+        resultsToUpsert.set(`${r.inspection_id}_${r.item_id}`, r);
+      }
+    });
+    if (overlay?.resultsUpserted) {
+      for (const [k, r] of Object.entries(overlay.resultsUpserted)) {
+        resultsToUpsert.set(k, r);
+      }
+    }
+
+    if (resultsToUpsert.size > 0) {
+      const rows = Array.from(resultsToUpsert.values()).map((r) => ({
+        inspection_id: r.inspection_id,
+        item_id: r.item_id,
+        site_id: r.site_id,
+        item_title: r.item_title,
+        group_name: r.group_name,
+        is_critical: r.is_critical ?? false,
+        status: r.status,
+        severity: r.severity ?? null,
+        note: r.note ?? null,
+        photo_urls: Array.isArray(r.photo_urls) ? r.photo_urls : [],
+        checked_at: r.checked_at || new Date().toISOString(),
+      }));
+      const { error } = await supabase
+        .from('inspection_results')
+        .upsert(rows, { onConflict: 'inspection_id,item_id' });
+      if (!error) {
+        syncedCount += rows.length;
+      } else {
+        errors.push(`Đồng bộ bảng inspection_results: ${error.message}`);
+      }
+    }
+
+    // 6. Sync Corrective Actions
+    const actionsToUpsert = new Map<string, CorrectiveAction>();
+    (currentSnapshot?.correctiveActions || []).forEach((a) => {
+      if (a?.id) actionsToUpsert.set(a.id, a);
+    });
+    readLegacyArray<CorrectiveAction>(['biowash_corrective_actions', 'corrective_actions']).forEach(
+      (a) => {
+        if (a?.id) actionsToUpsert.set(a.id, a);
+      }
+    );
+    (overlay?.actionsCreated || []).forEach((a) => {
+      if (a?.id) actionsToUpsert.set(a.id, a);
+    });
+    if (overlay?.actionsUpdated) {
+      for (const [actId, patch] of Object.entries(overlay.actionsUpdated)) {
+        const existing = actionsToUpsert.get(actId);
+        if (existing) {
+          actionsToUpsert.set(actId, { ...existing, ...patch });
+        } else {
+          const { error } = await supabase
+            .from('corrective_actions')
+            .update(patch)
+            .eq('id', actId);
+          if (!error) syncedCount++;
+          else errors.push(`Cập nhật sự vụ khắc phục: ${error.message}`);
+        }
+      }
+    }
+
+    if (actionsToUpsert.size > 0) {
+      const rows = Array.from(actionsToUpsert.values()).map((a) => ({
+        id: a.id,
+        site_id: a.site_id,
+        item_id: a.item_id ?? null,
+        description: a.description,
+        severity: a.severity ?? 'nghiem_trong',
+        assignee: a.assignee ?? null,
+        due_date: a.due_date ?? null,
+        status: a.status || 'open',
+        created_at: a.created_at || new Date().toISOString(),
+        closed_at: a.closed_at ?? null,
+      }));
+      const { error } = await supabase.from('corrective_actions').upsert(rows, { onConflict: 'id' });
+      if (!error) {
+        syncedCount += rows.length;
+      } else {
+        errors.push(`Đồng bộ bảng corrective_actions: ${error.message}`);
+      }
+    }
+
+    // 7. Sync Vehicle Washes
+    const washesToUpsert = new Map<string, VehicleWash>();
+    (currentSnapshot?.vehicleWashes || []).forEach((w) => {
+      if (w?.id) washesToUpsert.set(w.id, w);
+    });
+    readLegacyArray<VehicleWash>(['biowash_vehicle_washes', 'vehicle_washes']).forEach((w) => {
+      if (w?.id) washesToUpsert.set(w.id, w);
+    });
+    (overlay?.washesCreated || []).forEach((w) => {
+      if (w?.id) washesToUpsert.set(w.id, w);
+    });
+    if (overlay?.washesUpdated) {
+      for (const [washId, patch] of Object.entries(overlay.washesUpdated)) {
+        const existing = washesToUpsert.get(washId);
+        if (existing) {
+          washesToUpsert.set(washId, { ...existing, ...patch });
+        } else {
+          const { error } = await supabase.from('vehicle_washes').update(patch).eq('id', washId);
+          if (!error) syncedCount++;
+          else errors.push(`Cập nhật nhật ký rửa xe: ${error.message}`);
+        }
+      }
+    }
+
+    if (washesToUpsert.size > 0) {
+      const rows = Array.from(washesToUpsert.values()).map((w) => ({
+        id: w.id,
+        site_id: w.site_id,
+        plate: w.plate,
+        vehicle_type: w.vehicle_type,
+        driver: w.driver ?? null,
+        origin: w.origin ?? null,
+        destination: w.destination ?? null,
+        steps: w.steps ?? [],
+        result: w.result ?? null,
+        started_at: w.started_at || new Date().toISOString(),
+        finished_at: w.finished_at ?? null,
+      }));
+      const { error } = await supabase.from('vehicle_washes').upsert(rows, { onConflict: 'id' });
+      if (!error) {
+        syncedCount += rows.length;
+      } else {
+        errors.push(`Đồng bộ bảng vehicle_washes: ${error.message}`);
+      }
+    }
+
+    // Clear legacy localStorage keys if sync succeeded without table errors
+    if (errors.length === 0 && typeof window !== 'undefined') {
+      try {
+        window.localStorage.removeItem(LEGACY_OVERLAY_KEY);
+        for (const k of LEGACY_DIRECT_KEYS) {
+          window.localStorage.removeItem(k);
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    return { syncedCount, errors };
+  },
+
   // 1. Profile
   async getProfile(userId: string): Promise<Profile | null> {
     if (userId === '00000000-0000-0000-0000-000000000001') {
@@ -109,22 +460,22 @@ export const repository = {
     return data as Profile | null;
   },
 
-  // 2. Overview & Sites
+  // 2. Overview & Sites (Read/Write directly from/to Supabase)
   async getSiteOverview(): Promise<SiteOverview[]> {
-    const { data } = await supabase.from('v_site_overview').select('*');
-    const baseOverview = ((data || []) as SiteOverview[]).filter(
-      (o) => !adminOverlay.sitesDeleted.includes(o.site_id)
-    );
+    const { data: viewData, error: viewErr } = await supabase.from('v_site_overview').select('*');
+    if (!viewErr && viewData && viewData.length > 0) {
+      return viewData as SiteOverview[];
+    }
 
-    const allSites = await this.getSites(false);
-    const allItems = await this.getChecklistItems();
-    const allActions = await this.getCorrectiveActions();
-    const overviewMap = new Map<string, SiteOverview>();
-    baseOverview.forEach((o) => overviewMap.set(o.site_id, { ...o }));
+    // Compute overview directly from Supabase tables if v_site_overview is empty or not created yet
+    const [allSites, allItems, allActions] = await Promise.all([
+      this.getSites(false),
+      this.getChecklistItems(),
+      this.getCorrectiveActions(),
+    ]);
 
     const now = Date.now();
-    for (const s of allSites) {
-      const existing = overviewMap.get(s.id);
+    return allSites.map((s) => {
       const sItems = allItems.filter((it) => it.site_id === s.id && it.is_active);
       const sActions = allActions.filter((a) => a.site_id === s.id && a.status !== 'closed');
       const overdueCount = sActions.filter(
@@ -139,30 +490,30 @@ export const repository = {
         (it) => it.is_critical && it.current_status === 'fail'
       ).length;
       const checkedCount = passItems + failItems;
-      const computedPct =
-        checkedCount > 0
-          ? Math.round((passItems / checkedCount) * 100)
-          : existing?.compliance_pct ?? 100;
+      const computedPct = checkedCount > 0 ? Math.round((passItems / checkedCount) * 100) : 100;
 
-      overviewMap.set(s.id, {
+      const lastCheckedDates = sItems
+        .map((it) => it.last_checked_at)
+        .filter((d): d is string => !!d)
+        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+
+      return {
         site_id: s.id,
         name: s.name,
         site_type: s.site_type,
         lat: s.lat,
         lng: s.lng,
-        total_items: totalItems || existing?.total_items || 0,
-        pass_items: passItems || existing?.pass_items || 0,
-        fail_items: failItems || existing?.fail_items || 0,
-        pending_items: pendingItems || existing?.pending_items || 0,
-        critical_fail: critFail || existing?.critical_fail || 0,
+        total_items: totalItems,
+        pass_items: passItems,
+        fail_items: failItems,
+        pending_items: pendingItems,
+        critical_fail: critFail,
         compliance_pct: computedPct,
-        last_checked_at: existing?.last_checked_at ?? null,
+        last_checked_at: lastCheckedDates[0] ?? null,
         open_actions: sActions.length,
         overdue_actions: overdueCount,
-      });
-    }
-
-    return Array.from(overviewMap.values());
+      };
+    });
   },
 
   async getSites(includeInactive = true): Promise<Site[]> {
@@ -170,26 +521,11 @@ export const repository = {
     if (!includeInactive) {
       query = query.eq('is_active', true);
     }
-    const { data } = await query;
-    const remoteSites = (data || []) as Site[];
-
-    const mergedMap = new Map<string, Site>();
-    remoteSites.forEach((s) => {
-      if (!adminOverlay.sitesDeleted.includes(s.id)) {
-        const patch = adminOverlay.sitesUpdated[s.id];
-        mergedMap.set(s.id, patch ? { ...s, ...patch } : s);
-      }
-    });
-    adminOverlay.sitesCreated.forEach((s) => {
-      if (!adminOverlay.sitesDeleted.includes(s.id)) {
-        const patch = adminOverlay.sitesUpdated[s.id];
-        mergedMap.set(s.id, patch ? { ...s, ...patch } : s);
-      }
-    });
-
-    const list = Array.from(mergedMap.values()).filter((s) =>
-      includeInactive ? true : s.is_active
-    );
+    const { data, error } = await query;
+    if (error) {
+      throw new Error(`Không thể tải danh sách điểm rửa xe từ Supabase: ${error.message}`);
+    }
+    const list = ((data || []) as Site[]).filter((s) => (includeInactive ? true : s.is_active));
     list.sort((a, b) => a.name.localeCompare(b.name, 'vi'));
     return list;
   },
@@ -198,23 +534,19 @@ export const repository = {
     sitePayload: Omit<Site, 'id'>,
     copyFromSiteId?: string | null
   ): Promise<Site> {
-    let newSite: Site | null = null;
     const { data, error: siteErr } = await supabase
       .from('sites')
       .insert(sitePayload)
       .select('*')
       .single();
 
-    if (!siteErr && data) {
-      newSite = data as Site;
-    } else {
-      newSite = {
-        id: genUUID(),
-        ...sitePayload,
-      };
-      adminOverlay.sitesCreated.push(newSite);
-      saveOverlay(adminOverlay);
+    if (siteErr || !data) {
+      throw new Error(
+        `Không thể lưu điểm rửa xe vào Supabase (${siteErr?.message || 'Lỗi RLS'}). Hãy kiểm tra phân quyền RLS trên Supabase.`
+      );
     }
+
+    const newSite = data as Site;
 
     // Copy checklist items either from another site or from default 6-group template
     let itemsToInsert: Array<{
@@ -233,7 +565,7 @@ export const repository = {
       );
       if (sourceItems.length > 0) {
         itemsToInsert = sourceItems.map((it, idx) => ({
-          site_id: newSite!.id,
+          site_id: newSite.id,
           group_name: it.group_name,
           title: it.title,
           is_critical: it.is_critical,
@@ -246,7 +578,7 @@ export const repository = {
 
     if (itemsToInsert.length === 0) {
       itemsToInsert = DEFAULT_TEMPLATE_ITEMS.map((it) => ({
-        site_id: newSite!.id,
+        site_id: newSite.id,
         group_name: it.group_name,
         title: it.title,
         is_critical: it.is_critical,
@@ -258,24 +590,7 @@ export const repository = {
 
     const { error: itemsErr } = await supabase.from('checklist_items').insert(itemsToInsert);
     if (itemsErr) {
-      const nowIso = new Date().toISOString();
-      itemsToInsert.forEach((it) => {
-        adminOverlay.itemsCreated.push({
-          id: genUUID(),
-          site_id: it.site_id,
-          group_name: it.group_name,
-          title: it.title,
-          is_critical: it.is_critical,
-          sort_order: it.sort_order,
-          is_active: true,
-          current_status: 'pending',
-          current_severity: null,
-          last_checked_at: null,
-          last_checked_by: null,
-          updated_at: nowIso,
-        });
-      });
-      saveOverlay(adminOverlay);
+      throw new Error(`Đã tạo điểm nhưng lỗi tạo bộ hạng mục trên Supabase: ${itemsErr.message}`);
     }
 
     return newSite;
@@ -289,22 +604,12 @@ export const repository = {
       .select('*')
       .single();
 
-    if (!error && data) {
-      if (adminOverlay.sitesUpdated[siteId]) {
-        delete adminOverlay.sitesUpdated[siteId];
-        saveOverlay(adminOverlay);
-      }
-      return data as Site;
+    if (error || !data) {
+      throw new Error(
+        `Không thể cập nhật điểm rửa xe trên Supabase: ${error?.message || 'Lỗi quyền ghi RLS'}`
+      );
     }
-
-    adminOverlay.sitesUpdated[siteId] = {
-      ...(adminOverlay.sitesUpdated[siteId] || {}),
-      ...payload,
-    };
-    saveOverlay(adminOverlay);
-    const sites = await this.getSites(true);
-    const found = sites.find((s) => s.id === siteId);
-    return (found || { id: siteId, ...payload }) as Site;
+    return data as Site;
   },
 
   async deleteSite(siteId: string): Promise<void> {
@@ -313,17 +618,13 @@ export const repository = {
     await supabase.from('inspections').delete().eq('site_id', siteId);
     await supabase.from('vehicle_washes').delete().eq('site_id', siteId);
     await supabase.from('checklist_items').delete().eq('site_id', siteId);
-    await supabase.from('sites').delete().eq('id', siteId);
-
-    if (!adminOverlay.sitesDeleted.includes(siteId)) {
-      adminOverlay.sitesDeleted.push(siteId);
+    const { error } = await supabase.from('sites').delete().eq('id', siteId);
+    if (error) {
+      throw new Error(`Không thể xóa điểm rửa xe trên Supabase: ${error.message}`);
     }
-    adminOverlay.sitesCreated = adminOverlay.sitesCreated.filter((s) => s.id !== siteId);
-    delete adminOverlay.sitesUpdated[siteId];
-    saveOverlay(adminOverlay);
   },
 
-  // 3. Checklist Items
+  // 3. Checklist Items (Read/Write directly from/to Supabase)
   async getChecklistItems(siteId?: string): Promise<ChecklistItem[]> {
     let query = supabase
       .from('checklist_items')
@@ -332,31 +633,11 @@ export const repository = {
     if (siteId) {
       query = query.eq('site_id', siteId);
     }
-    const { data } = await query;
-    const remoteItems = (data || []) as ChecklistItem[];
-
-    const mergedMap = new Map<string, ChecklistItem>();
-    remoteItems.forEach((it) => {
-      if (
-        !adminOverlay.itemsDeleted.includes(it.id) &&
-        !adminOverlay.sitesDeleted.includes(it.site_id)
-      ) {
-        const patch = adminOverlay.itemsUpdated[it.id];
-        mergedMap.set(it.id, patch ? { ...it, ...patch } : it);
-      }
-    });
-    adminOverlay.itemsCreated.forEach((it) => {
-      if (
-        (!siteId || it.site_id === siteId) &&
-        !adminOverlay.itemsDeleted.includes(it.id) &&
-        !adminOverlay.sitesDeleted.includes(it.site_id)
-      ) {
-        const patch = adminOverlay.itemsUpdated[it.id];
-        mergedMap.set(it.id, patch ? { ...it, ...patch } : it);
-      }
-    });
-
-    const list = Array.from(mergedMap.values());
+    const { data, error } = await query;
+    if (error) {
+      throw new Error(`Không thể tải hạng mục checklist từ Supabase: ${error.message}`);
+    }
+    const list = (data || []) as ChecklistItem[];
     list.sort((a, b) => a.sort_order - b.sort_order);
     return list;
   },
@@ -380,27 +661,10 @@ export const repository = {
       .select('*')
       .single();
 
-    if (!error && data) {
-      return data as ChecklistItem;
+    if (error || !data) {
+      throw new Error(`Không thể thêm hạng mục vào Supabase: ${error?.message || 'Lỗi RLS'}`);
     }
-
-    const fallbackItem: ChecklistItem = {
-      id: genUUID(),
-      site_id: payload.site_id,
-      group_name: payload.group_name,
-      title: payload.title,
-      is_critical: payload.is_critical,
-      sort_order: payload.sort_order,
-      is_active: true,
-      current_status: 'pending',
-      current_severity: null,
-      last_checked_at: null,
-      last_checked_by: null,
-      updated_at: nowIso,
-    };
-    adminOverlay.itemsCreated.push(fallbackItem);
-    saveOverlay(adminOverlay);
-    return fallbackItem;
+    return data as ChecklistItem;
   },
 
   async updateChecklistItem(
@@ -440,33 +704,19 @@ export const repository = {
       .select('*')
       .single();
 
-    if (!error && data) {
-      if (adminOverlay.itemsUpdated[itemId]) {
-        delete adminOverlay.itemsUpdated[itemId];
-        saveOverlay(adminOverlay);
-      }
-      return data as ChecklistItem;
+    if (error || !data) {
+      throw new Error(`Không thể cập nhật hạng mục trên Supabase: ${error?.message || 'Lỗi RLS'}`);
     }
-
-    adminOverlay.itemsUpdated[itemId] = {
-      ...(adminOverlay.itemsUpdated[itemId] || {}),
-      ...updateData,
-    };
-    saveOverlay(adminOverlay);
-    return { id: itemId, ...updateData } as ChecklistItem;
+    return data as ChecklistItem;
   },
 
   async deleteChecklistItem(itemId: string): Promise<void> {
     await supabase.from('inspection_results').delete().eq('item_id', itemId);
     await supabase.from('corrective_actions').delete().eq('item_id', itemId);
-    await supabase.from('checklist_items').delete().eq('id', itemId);
-
-    if (!adminOverlay.itemsDeleted.includes(itemId)) {
-      adminOverlay.itemsDeleted.push(itemId);
+    const { error } = await supabase.from('checklist_items').delete().eq('id', itemId);
+    if (error) {
+      throw new Error(`Không thể xóa hạng mục trên Supabase: ${error.message}`);
     }
-    adminOverlay.itemsCreated = adminOverlay.itemsCreated.filter((it) => it.id !== itemId);
-    delete adminOverlay.itemsUpdated[itemId];
-    saveOverlay(adminOverlay);
   },
 
   async copyDefaultItemsToSite(siteId: string, sourceSiteId?: string): Promise<void> {
@@ -497,27 +747,11 @@ export const repository = {
     }));
     const { error } = await supabase.from('checklist_items').insert(rows);
     if (error) {
-      rows.forEach((r) => {
-        adminOverlay.itemsCreated.push({
-          id: genUUID(),
-          site_id: r.site_id,
-          group_name: r.group_name,
-          title: r.title,
-          is_critical: r.is_critical,
-          sort_order: r.sort_order,
-          is_active: true,
-          current_status: 'pending',
-          current_severity: null,
-          last_checked_at: null,
-          last_checked_by: null,
-          updated_at: nowIso,
-        });
-      });
-      saveOverlay(adminOverlay);
+      throw new Error(`Không thể sao chép bộ hạng mục lên Supabase: ${error.message}`);
     }
   },
 
-  // 4. Inspections & Inspection Results
+  // 4. Inspections & Inspection Results (Read/Write directly from/to Supabase)
   async getInspections(siteId?: string): Promise<Inspection[]> {
     let query = supabase
       .from('inspections')
@@ -526,33 +760,11 @@ export const repository = {
     if (siteId) {
       query = query.eq('site_id', siteId);
     }
-    const { data } = await query;
-    const remote = (data || []) as Inspection[];
-
-    const mergedMap = new Map<string, Inspection>();
-    remote.forEach((ins) => {
-      if (
-        !adminOverlay.inspectionsDeleted.includes(ins.id) &&
-        !adminOverlay.sitesDeleted.includes(ins.site_id)
-      ) {
-        const patch = adminOverlay.inspectionsUpdated[ins.id];
-        mergedMap.set(ins.id, patch ? { ...ins, ...patch } : ins);
-      }
-    });
-    adminOverlay.inspectionsCreated.forEach((ins) => {
-      if (
-        (!siteId || ins.site_id === siteId) &&
-        !adminOverlay.inspectionsDeleted.includes(ins.id) &&
-        !adminOverlay.sitesDeleted.includes(ins.site_id)
-      ) {
-        const patch = adminOverlay.inspectionsUpdated[ins.id];
-        mergedMap.set(ins.id, patch ? { ...ins, ...patch } : ins);
-      }
-    });
-
-    const list = Array.from(mergedMap.values());
-    list.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
-    return list;
+    const { data, error } = await query;
+    if (error) {
+      throw new Error(`Không thể tải danh sách phiên kiểm tra từ Supabase: ${error.message}`);
+    }
+    return (data || []) as Inspection[];
   },
 
   async getOrCreateDraftInspection(params: {
@@ -606,27 +818,13 @@ export const repository = {
       error = retry.error;
     }
 
-    if (!error && created) {
-      return { inspection: created as Inspection, results: [] };
+    if (error || !created) {
+      throw new Error(
+        `Không thể khởi tạo phiên kiểm tra trên Supabase: ${error?.message || 'Lỗi RLS'}`
+      );
     }
 
-    const fallbackInsp: Inspection = {
-      id: genUUID(),
-      site_id: params.site_id,
-      kind: 'dieu_kien',
-      inspector_id: params.inspector_id,
-      inspector_name: params.inspector_name,
-      status: 'draft',
-      score: null,
-      result: null,
-      signature_url: null,
-      gps: null,
-      started_at: startedAt,
-      finished_at: null,
-    };
-    adminOverlay.inspectionsCreated.push(fallbackInsp);
-    saveOverlay(adminOverlay);
-    return { inspection: fallbackInsp, results: [] };
+    return { inspection: created as Inspection, results: [] };
   },
 
   async updateInspection(
@@ -640,37 +838,20 @@ export const repository = {
       .select('*')
       .single();
 
-    if (!error && data) {
-      if (adminOverlay.inspectionsUpdated[inspectionId]) {
-        delete adminOverlay.inspectionsUpdated[inspectionId];
-        saveOverlay(adminOverlay);
-      }
-      return data as Inspection;
+    if (error || !data) {
+      throw new Error(
+        `Không thể cập nhật phiên kiểm tra trên Supabase: ${error?.message || 'Lỗi RLS'}`
+      );
     }
-
-    adminOverlay.inspectionsUpdated[inspectionId] = {
-      ...(adminOverlay.inspectionsUpdated[inspectionId] || {}),
-      ...payload,
-    };
-    saveOverlay(adminOverlay);
-    return { id: inspectionId, ...payload } as Inspection;
+    return data as Inspection;
   },
 
   async deleteInspection(inspectionId: string): Promise<void> {
     await supabase.from('inspection_results').delete().eq('inspection_id', inspectionId);
-    await supabase.from('inspections').delete().eq('id', inspectionId);
-
-    if (!adminOverlay.inspectionsDeleted.includes(inspectionId)) {
-      adminOverlay.inspectionsDeleted.push(inspectionId);
+    const { error } = await supabase.from('inspections').delete().eq('id', inspectionId);
+    if (error) {
+      throw new Error(`Không thể xóa phiên kiểm tra trên Supabase: ${error.message}`);
     }
-    if (!adminOverlay.resultsDeletedByInspection.includes(inspectionId)) {
-      adminOverlay.resultsDeletedByInspection.push(inspectionId);
-    }
-    adminOverlay.inspectionsCreated = adminOverlay.inspectionsCreated.filter(
-      (i) => i.id !== inspectionId
-    );
-    delete adminOverlay.inspectionsUpdated[inspectionId];
-    saveOverlay(adminOverlay);
   },
 
   async getInspectionResults(inspectionId?: string): Promise<InspectionResultRow[]> {
@@ -681,30 +862,11 @@ export const repository = {
     if (inspectionId) {
       query = query.eq('inspection_id', inspectionId);
     }
-    const { data } = await query;
-    const remote = (data || []) as InspectionResultRow[];
-
-    const mergedMap = new Map<string, InspectionResultRow>();
-    remote.forEach((r) => {
-      if (
-        !adminOverlay.resultsDeletedByInspection.includes(r.inspection_id) &&
-        !adminOverlay.inspectionsDeleted.includes(r.inspection_id)
-      ) {
-        const key = `${r.inspection_id}_${r.item_id}`;
-        mergedMap.set(key, adminOverlay.resultsUpserted[key] || r);
-      }
-    });
-
-    Object.entries(adminOverlay.resultsUpserted).forEach(([key, r]) => {
-      if (
-        (!inspectionId || r.inspection_id === inspectionId) &&
-        !adminOverlay.resultsDeletedByInspection.includes(r.inspection_id)
-      ) {
-        mergedMap.set(key, r);
-      }
-    });
-
-    return Array.from(mergedMap.values());
+    const { data, error } = await query;
+    if (error) {
+      throw new Error(`Không thể tải kết quả kiểm tra từ Supabase: ${error.message}`);
+    }
+    return (data || []) as InspectionResultRow[];
   },
 
   async upsertInspectionResult(
@@ -740,44 +902,66 @@ export const repository = {
       .upsert(payload, { onConflict: 'inspection_id,item_id' });
 
     if (error) {
-      const key = `${row.inspection_id}_${row.item_id}`;
-      adminOverlay.resultsUpserted[key] = {
-        id: adminOverlay.resultsUpserted[key]?.id || genUUID(),
-        ...payload,
-      };
-      adminOverlay.itemsUpdated[row.item_id] = {
-        ...(adminOverlay.itemsUpdated[row.item_id] || {}),
+      throw new Error(`Không thể lưu kết quả hạng mục vào Supabase: ${error.message}`);
+    }
+
+    // Also update checklist_items status directly in Supabase so status stays synced even without DB triggers
+    await supabase
+      .from('checklist_items')
+      .update({
         current_status: row.status,
         current_severity: row.status === 'fail' ? row.severity : null,
         last_checked_at: row.checked_at,
-      };
-      if (row.status === 'fail') {
-        adminOverlay.actionsCreated.push({
-          id: genUUID(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', row.item_id);
+
+    // Ensure corrective_actions are synced in Supabase on fail / pass
+    if (row.status === 'fail') {
+      const { data: openExisting } = await supabase
+        .from('corrective_actions')
+        .select('id')
+        .eq('site_id', row.site_id)
+        .eq('item_id', row.item_id)
+        .neq('status', 'closed')
+        .maybeSingle();
+
+      const desc =
+        row.note && row.note.trim()
+          ? `${row.item_title}: ${row.note}`
+          : `Lỗi hạng mục: ${row.item_title}`;
+
+      if (openExisting?.id) {
+        const updateFields: Record<string, unknown> = {
+          description: desc,
+          severity: row.severity || 'nghiem_trong',
+        };
+        if (correctiveMeta?.assignee) updateFields.assignee = correctiveMeta.assignee;
+        if (correctiveMeta?.due_date) updateFields.due_date = correctiveMeta.due_date;
+
+        await supabase
+          .from('corrective_actions')
+          .update(updateFields)
+          .eq('id', openExisting.id);
+      } else {
+        await supabase.from('corrective_actions').insert({
           site_id: row.site_id,
           item_id: row.item_id,
-          description: row.note ? `${row.item_title}: ${row.note}` : `Lỗi hạng mục: ${row.item_title}`,
+          description: desc,
           severity: row.severity || 'nghiem_trong',
           assignee: correctiveMeta?.assignee || null,
           due_date: correctiveMeta?.due_date || null,
           status: 'open',
           created_at: new Date().toISOString(),
-          closed_at: null,
         });
       }
-      saveOverlay(adminOverlay);
-      return;
-    }
-
-    if (row.status === 'fail' && correctiveMeta && (correctiveMeta.assignee || correctiveMeta.due_date)) {
-      const updateFields: Record<string, unknown> = {};
-      if (correctiveMeta.assignee) updateFields.assignee = correctiveMeta.assignee;
-      if (correctiveMeta.due_date) updateFields.due_date = correctiveMeta.due_date;
-      if (row.severity) updateFields.severity = row.severity;
-
+    } else if (row.status === 'pass') {
       await supabase
         .from('corrective_actions')
-        .update(updateFields)
+        .update({
+          status: 'closed',
+          closed_at: new Date().toISOString(),
+        })
         .eq('site_id', row.site_id)
         .eq('item_id', row.item_id)
         .neq('status', 'closed');
@@ -821,19 +1005,15 @@ export const repository = {
       .select('*')
       .single();
 
-    if (!error && data) {
-      return data as Inspection;
+    if (error || !data) {
+      throw new Error(
+        `Không thể hoàn tất biên bản kiểm tra trên Supabase: ${error?.message || 'Lỗi RLS'}`
+      );
     }
-
-    adminOverlay.inspectionsUpdated[inspectionId] = {
-      ...(adminOverlay.inspectionsUpdated[inspectionId] || {}),
-      ...(updateData as unknown as Partial<Inspection>),
-    };
-    saveOverlay(adminOverlay);
-    return { id: inspectionId, ...updateData } as unknown as Inspection;
+    return data as Inspection;
   },
 
-  // 5. Corrective Actions
+  // 5. Corrective Actions (Read/Write directly from/to Supabase)
   async getCorrectiveActions(siteId?: string): Promise<CorrectiveAction[]> {
     let query = supabase
       .from('corrective_actions')
@@ -842,33 +1022,11 @@ export const repository = {
     if (siteId) {
       query = query.eq('site_id', siteId);
     }
-    const { data } = await query;
-    const remote = (data || []) as CorrectiveAction[];
-
-    const mergedMap = new Map<string, CorrectiveAction>();
-    remote.forEach((a) => {
-      if (
-        !adminOverlay.actionsDeleted.includes(a.id) &&
-        !adminOverlay.sitesDeleted.includes(a.site_id)
-      ) {
-        const patch = adminOverlay.actionsUpdated[a.id];
-        mergedMap.set(a.id, patch ? { ...a, ...patch } : a);
-      }
-    });
-    adminOverlay.actionsCreated.forEach((a) => {
-      if (
-        (!siteId || a.site_id === siteId) &&
-        !adminOverlay.actionsDeleted.includes(a.id) &&
-        !adminOverlay.sitesDeleted.includes(a.site_id)
-      ) {
-        const patch = adminOverlay.actionsUpdated[a.id];
-        mergedMap.set(a.id, patch ? { ...a, ...patch } : a);
-      }
-    });
-
-    const list = Array.from(mergedMap.values());
-    list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-    return list;
+    const { data, error } = await query;
+    if (error) {
+      throw new Error(`Không thể tải danh sách sự vụ khắc phục từ Supabase: ${error.message}`);
+    }
+    return (data || []) as CorrectiveAction[];
   },
 
   async createCorrectiveAction(payload: {
@@ -895,25 +1053,12 @@ export const repository = {
       .select('*')
       .single();
 
-    if (!error && data) {
-      return data as CorrectiveAction;
+    if (error || !data) {
+      throw new Error(
+        `Không thể tạo sự vụ khắc phục trên Supabase: ${error?.message || 'Lỗi RLS'}`
+      );
     }
-
-    const fallback: CorrectiveAction = {
-      id: genUUID(),
-      site_id: payload.site_id,
-      item_id: payload.item_id || null,
-      description: payload.description,
-      severity: payload.severity,
-      assignee: payload.assignee || null,
-      due_date: payload.due_date || null,
-      status: 'open',
-      created_at: createdAt,
-      closed_at: null,
-    };
-    adminOverlay.actionsCreated.push(fallback);
-    saveOverlay(adminOverlay);
-    return fallback;
+    return data as CorrectiveAction;
   },
 
   async updateCorrectiveAction(
@@ -952,33 +1097,22 @@ export const repository = {
       .select('*')
       .single();
 
-    if (!error && data) {
-      if (adminOverlay.actionsUpdated[actionId]) {
-        delete adminOverlay.actionsUpdated[actionId];
-        saveOverlay(adminOverlay);
-      }
-      return data as CorrectiveAction;
+    if (error || !data) {
+      throw new Error(
+        `Không thể cập nhật sự vụ khắc phục trên Supabase: ${error?.message || 'Lỗi RLS'}`
+      );
     }
-
-    adminOverlay.actionsUpdated[actionId] = {
-      ...(adminOverlay.actionsUpdated[actionId] || {}),
-      ...updateData,
-    };
-    saveOverlay(adminOverlay);
-    return { id: actionId, ...updateData } as CorrectiveAction;
+    return data as CorrectiveAction;
   },
 
   async deleteCorrectiveAction(actionId: string): Promise<void> {
-    await supabase.from('corrective_actions').delete().eq('id', actionId);
-    if (!adminOverlay.actionsDeleted.includes(actionId)) {
-      adminOverlay.actionsDeleted.push(actionId);
+    const { error } = await supabase.from('corrective_actions').delete().eq('id', actionId);
+    if (error) {
+      throw new Error(`Không thể xóa sự vụ khắc phục trên Supabase: ${error.message}`);
     }
-    adminOverlay.actionsCreated = adminOverlay.actionsCreated.filter((a) => a.id !== actionId);
-    delete adminOverlay.actionsUpdated[actionId];
-    saveOverlay(adminOverlay);
   },
 
-  // 6. Vehicle Washes
+  // 6. Vehicle Washes (Read/Write directly from/to Supabase)
   async getVehicleWashes(siteId?: string): Promise<VehicleWash[]> {
     let query = supabase
       .from('vehicle_washes')
@@ -987,33 +1121,11 @@ export const repository = {
     if (siteId) {
       query = query.eq('site_id', siteId);
     }
-    const { data } = await query;
-    const remote = (data || []) as VehicleWash[];
-
-    const mergedMap = new Map<string, VehicleWash>();
-    remote.forEach((w) => {
-      if (
-        !adminOverlay.washesDeleted.includes(w.id) &&
-        !adminOverlay.sitesDeleted.includes(w.site_id)
-      ) {
-        const patch = adminOverlay.washesUpdated[w.id];
-        mergedMap.set(w.id, patch ? { ...w, ...patch } : w);
-      }
-    });
-    adminOverlay.washesCreated.forEach((w) => {
-      if (
-        (!siteId || w.site_id === siteId) &&
-        !adminOverlay.washesDeleted.includes(w.id) &&
-        !adminOverlay.sitesDeleted.includes(w.site_id)
-      ) {
-        const patch = adminOverlay.washesUpdated[w.id];
-        mergedMap.set(w.id, patch ? { ...w, ...patch } : w);
-      }
-    });
-
-    const list = Array.from(mergedMap.values());
-    list.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
-    return list;
+    const { data, error } = await query;
+    if (error) {
+      throw new Error(`Không thể tải nhật ký rửa xe từ Supabase: ${error.message}`);
+    }
+    return (data || []) as VehicleWash[];
   },
 
   async createVehicleWash(
@@ -1029,19 +1141,10 @@ export const repository = {
       .select('*')
       .single();
 
-    if (!error && data) {
-      return data as VehicleWash;
+    if (error || !data) {
+      throw new Error(`Không thể lưu lượt rửa xe vào Supabase: ${error?.message || 'Lỗi RLS'}`);
     }
-
-    const fallback: VehicleWash = {
-      id: genUUID(),
-      ...payload,
-      result: null,
-      finished_at: null,
-    };
-    adminOverlay.washesCreated.push(fallback);
-    saveOverlay(adminOverlay);
-    return fallback;
+    return data as VehicleWash;
   },
 
   async updateVehicleWash(
@@ -1049,7 +1152,14 @@ export const repository = {
     payload: Partial<
       Pick<
         VehicleWash,
-        'plate' | 'vehicle_type' | 'driver' | 'origin' | 'destination' | 'steps' | 'result' | 'finished_at'
+        | 'plate'
+        | 'vehicle_type'
+        | 'driver'
+        | 'origin'
+        | 'destination'
+        | 'steps'
+        | 'result'
+        | 'finished_at'
       >
     >
   ): Promise<VehicleWash> {
@@ -1071,33 +1181,22 @@ export const repository = {
       .select('*')
       .single();
 
-    if (!error && data) {
-      if (adminOverlay.washesUpdated[washId]) {
-        delete adminOverlay.washesUpdated[washId];
-        saveOverlay(adminOverlay);
-      }
-      return data as VehicleWash;
+    if (error || !data) {
+      throw new Error(
+        `Không thể cập nhật nhật ký rửa xe trên Supabase: ${error?.message || 'Lỗi RLS'}`
+      );
     }
-
-    adminOverlay.washesUpdated[washId] = {
-      ...(adminOverlay.washesUpdated[washId] || {}),
-      ...payload,
-    };
-    saveOverlay(adminOverlay);
-    return { id: washId, ...payload } as VehicleWash;
+    return data as VehicleWash;
   },
 
   async deleteVehicleWash(washId: string): Promise<void> {
-    await supabase.from('vehicle_washes').delete().eq('id', washId);
-    if (!adminOverlay.washesDeleted.includes(washId)) {
-      adminOverlay.washesDeleted.push(washId);
+    const { error } = await supabase.from('vehicle_washes').delete().eq('id', washId);
+    if (error) {
+      throw new Error(`Không thể xóa lượt rửa xe trên Supabase: ${error.message}`);
     }
-    adminOverlay.washesCreated = adminOverlay.washesCreated.filter((w) => w.id !== washId);
-    delete adminOverlay.washesUpdated[washId];
-    saveOverlay(adminOverlay);
   },
 
-  // 7. Evidence Storage Upload
+  // 7. Evidence Storage Upload (Supabase Storage bucket `evidence`, with DataURL fallback stored inside Supabase table column)
   async uploadEvidenceFile(
     fileOrBlob: File | Blob,
     folder: 'photos' | 'signatures',

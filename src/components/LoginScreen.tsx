@@ -41,17 +41,54 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, extern
     setErrorMsg(null);
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
+      const signInRes = await supabase.auth.signInWithPassword({
         email,
         password,
       });
 
-      if (!error && data.user) {
-        const profile = await repository.getProfile(data.user.id).catch(() => null);
+      let authUser = signInRes.data?.user ?? null;
+      let authErr = signInRes.error;
+
+      // Auto-provision admin@tvc.local in Supabase Auth if not registered yet so `authenticated` RLS policies work out-of-the-box
+      if ((authErr || !authUser) && isAdminFallbackMatch) {
+        const signUpRes = await supabase.auth.signUp({
+          email: 'admin@tvc.local',
+          password: 'admintvc',
+        });
+        if (!signUpRes.error && signUpRes.data.user) {
+          authUser = signUpRes.data.user;
+          authErr = null;
+          await supabase
+            .from('profiles')
+            .upsert(
+              {
+                id: signUpRes.data.user.id,
+                full_name: 'Quản trị viên cao nhất (Admin TVC)',
+                role: 'admin',
+              },
+              { onConflict: 'id' }
+            );
+        }
+      }
+
+      if (!authErr && authUser) {
+        const profile = await repository.getProfile(authUser.id).catch(() => null);
         if (isAdminFallbackMatch || cleanUser === 'admin' || email === 'admin@tvc.local') {
+          if (!profile) {
+            await supabase
+              .from('profiles')
+              .upsert(
+                {
+                  id: authUser.id,
+                  full_name: 'Quản trị viên cao nhất (Admin TVC)',
+                  role: 'admin',
+                },
+                { onConflict: 'id' }
+              );
+          }
           setPassword('');
           onLoginSuccess({
-            id: profile?.id || data.user.id,
+            id: profile?.id || authUser.id,
             full_name: profile?.full_name || 'Quản trị viên cao nhất (Admin)',
             role: 'admin',
           });

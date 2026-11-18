@@ -1,9 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  Check,
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
+  CloudUpload,
+  Copy,
+  Database,
   History,
   LayoutDashboard,
   LogOut,
@@ -11,8 +15,11 @@ import {
   ShieldCheck,
   Wifi,
   WifiOff,
+  X,
 } from 'lucide-react';
 import { supabase } from './lib/supabase';
+import { repository } from './lib/repository';
+import { SUPABASE_SCHEMA_AND_RLS_SQL } from './lib/supabaseSchemaSql';
 import { clearOfflineQueue } from './lib/offlineQueue';
 import { useAppData } from './hooks/useAppData';
 import { useDevice } from './hooks/useDevice';
@@ -53,9 +60,15 @@ export default function App() {
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
   const [historySiteFilter, setHistorySiteFilter] = useState<string | null>(null);
 
-  // Modals
+  // Modals & Legacy Sync State
   const [showSiteModal, setShowSiteModal] = useState(false);
   const [managingItemsSite, setManagingItemsSite] = useState<Site | null>(null);
+  const [showSqlModal, setShowSqlModal] = useState(false);
+  const [copiedSql, setCopiedSql] = useState(false);
+  const [isSyncingLegacy, setIsSyncingLegacy] = useState(false);
+  const [hasLegacyData, setHasLegacyData] = useState<boolean>(() =>
+    repository.hasLegacyLocalData()
+  );
 
   // Search Input Ref for '/' keyboard shortcut
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -95,11 +108,58 @@ export default function App() {
     }
   }, []);
 
+  const handleSyncLegacyData = useCallback(async () => {
+    if (isSyncingLegacy) return;
+    setIsSyncingLegacy(true);
+    try {
+      const { syncedCount, errors } = await repository.syncLegacyLocalDataToSupabase({
+        sites,
+        checklistItems,
+        inspections,
+        inspectionResults,
+        correctiveActions,
+        vehicleWashes,
+      });
+      setHasLegacyData(repository.hasLegacyLocalData());
+      await refreshAll();
+      if (errors.length > 0) {
+        showToast(
+          `Đã đẩy ${syncedCount} bản ghi. Lưu ý RLS Supabase: ${errors[0]}`
+        );
+      } else {
+        showToast(
+          syncedCount > 0
+            ? `Đã đồng bộ thành công ${syncedCount} bản ghi dữ liệu lên các bảng Supabase!`
+            : 'Dữ liệu trên trình duyệt đã đồng bộ hoàn toàn với Supabase!'
+        );
+      }
+    } catch (e) {
+      showToast(
+        e instanceof Error
+          ? `Lỗi đồng bộ lên Supabase: ${e.message}`
+          : 'Không thể đồng bộ dữ liệu lên Supabase.'
+      );
+    } finally {
+      setIsSyncingLegacy(false);
+    }
+  }, [
+    isSyncingLegacy,
+    sites,
+    checklistItems,
+    inspections,
+    inspectionResults,
+    correctiveActions,
+    vehicleWashes,
+    refreshAll,
+    showToast,
+  ]);
+
   // Laptop/Desktop Keyboard Shortcuts: G+D (Overview), G+L (History), N (New Inspection), / (Search)
   const lastKeyGRef = useRef<number>(0);
 
   useEffect(() => {
     if (!isAuthenticated) return;
+    setHasLegacyData(repository.hasLegacyLocalData());
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       const isInput =
@@ -184,7 +244,7 @@ export default function App() {
       )}
 
       {/* TOP NAVIGATION BAR (3-Zone Contract) */}
-      <header className="sticky top-0 z-30 glass-panel rounded-none border-x-0 border-t-0 px-4 sm:px-6 h-14 flex items-center justify-between gap-4">
+      <header className="sticky top-0 z-30 glass-panel rounded-none border-x-0 border-t-0 px-3 sm:px-6 h-14 flex items-center justify-between gap-2 sm:gap-4">
         {/* Zone 1: Single-line Brand Wordmark */}
         <div className="flex items-center gap-2.5 shrink-0">
           <div className="w-8 h-8 rounded-xl btn-accent flex items-center justify-center text-white">
@@ -202,7 +262,7 @@ export default function App() {
               <>
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                 <Wifi className="w-3.5 h-3.5 text-emerald-300 hidden sm:inline" />
-                <span className="font-bold text-emerald-200">Trực tuyến</span>
+                <span className="font-bold text-emerald-200">Supabase Trực tuyến</span>
               </>
             ) : (
               <>
@@ -215,29 +275,55 @@ export default function App() {
             )}
           </div>
 
-          <span aria-hidden="true" className="text-white/40 hidden sm:inline">
+          <span aria-hidden="true" className="text-white/40 hidden md:inline">
             ·
           </span>
 
-          <div className="hidden sm:flex items-center gap-1.5 truncate">
+          <div className="hidden md:flex items-center gap-1.5 truncate">
             <span className="font-bold truncate">{profile.full_name}</span>
             <span aria-hidden="true">·</span>
             <span className="text-sky-200 font-bold uppercase">{profile.role}</span>
           </div>
         </div>
 
-        {/* Zone 3: Primary Action (Logout & PWA Install) */}
-        <div className="flex items-center gap-2 shrink-0">
+        {/* Zone 3: Primary Actions (Sync Legacy Data to Supabase, SQL RLS, PWA Install, Logout) */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={handleSyncLegacyData}
+            disabled={isSyncingLegacy}
+            className="min-h-[40px] px-2.5 sm:px-3.5 rounded-xl glass-tool text-xs font-bold flex items-center gap-1.5 transition whitespace-nowrap shrink-0 disabled:opacity-50"
+            title="Đẩy dữ liệu hiện có trong trình duyệt (localStorage / bộ nhớ tạm) lên các bảng Supabase"
+          >
+            <CloudUpload className="w-3.5 h-3.5 shrink-0" />
+            <span className="hidden sm:inline">
+              {isSyncingLegacy ? 'Đang đồng bộ...' : 'Đồng bộ dữ liệu cũ lên Supabase'}
+            </span>
+            <span className="sm:hidden">
+              {isSyncingLegacy ? 'Đang ĐB...' : 'Đồng bộ Supabase'}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowSqlModal(true)}
+            className="min-h-[40px] px-2.5 sm:px-3 rounded-xl glass-tool text-xs font-bold hidden xl:flex items-center gap-1.5 transition whitespace-nowrap shrink-0"
+            title="Xem mã SQL tạo bảng và Policy RLS trên Supabase"
+          >
+            <Database className="w-3.5 h-3.5 shrink-0" />
+            <span>SQL & RLS</span>
+          </button>
+
           <div className="hidden lg:block">
             <PWAInstallButton compact />
           </div>
           <button
             type="button"
             onClick={() => handleLogout()}
-            className="min-h-[42px] px-3 sm:px-3.5 rounded-xl bg-rose-500/25 hover:bg-rose-500/40 border border-rose-300/40 text-white text-xs font-bold flex items-center gap-1.5 transition whitespace-nowrap shrink-0"
+            className="min-h-[40px] px-2.5 sm:px-3.5 rounded-xl bg-rose-500/25 hover:bg-rose-500/40 border border-rose-300/40 text-white text-xs font-bold flex items-center gap-1.5 transition whitespace-nowrap shrink-0"
           >
             <LogOut className="w-3.5 h-3.5" />
-            <span>Đăng xuất</span>
+            <span className="hidden sm:inline">Đăng xuất</span>
           </button>
         </div>
       </header>
@@ -356,16 +442,53 @@ export default function App() {
             deviceType === 'mobile' ? 'pb-safe-dock' : 'pb-10'
           } ${uiPrefs.oneHandedMode && deviceType === 'mobile' ? 'pt-14' : ''}`}
         >
-          {error && (
-            <div className="mb-4 glass-card p-4 border border-rose-400/50 flex items-center justify-between gap-3 text-xs sm:text-sm text-rose-100">
-              <span>{error}</span>
+          {/* Banner notification when legacy localStorage data is detected in this browser */}
+          {hasLegacyData && (
+            <div className="mb-4 glass-card p-3.5 sm:p-4 border border-sky-400/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <p className="text-xs sm:text-sm font-bold text-white">
+                  Phát hiện dữ liệu cũ lưu trong trình duyệt này (localStorage)
+                </p>
+                <p className="text-xs text-white/80">
+                  Nhấn nút bên phải để đẩy toàn bộ dữ liệu hiện có trong trình duyệt lên các bảng Supabase giúp các máy khác cùng xem và cập nhật được.
+                </p>
+              </div>
               <button
                 type="button"
-                onClick={refreshAll}
-                className="min-h-[44px] px-4 rounded-xl bg-rose-600 text-white text-xs font-bold shrink-0"
+                onClick={handleSyncLegacyData}
+                disabled={isSyncingLegacy}
+                className="min-h-[44px] px-4 rounded-xl btn-accent text-xs font-bold flex items-center justify-center gap-2 shrink-0 disabled:opacity-50"
               >
-                Thử lại
+                <CloudUpload className="w-4 h-4" />
+                <span>
+                  {isSyncingLegacy
+                    ? 'Đang đồng bộ lên Supabase...'
+                    : 'Đồng bộ dữ liệu cũ lên Supabase'}
+                </span>
               </button>
+            </div>
+          )}
+
+          {error && (
+            <div className="mb-4 glass-card p-4 border border-rose-400/50 flex flex-wrap items-center justify-between gap-3 text-xs sm:text-sm text-rose-100">
+              <span>{error}</span>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowSqlModal(true)}
+                  className="min-h-[42px] px-3.5 rounded-xl glass-tool text-xs font-bold flex items-center gap-1.5"
+                >
+                  <Database className="w-3.5 h-3.5" />
+                  <span>Xem SQL & RLS</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={refreshAll}
+                  className="min-h-[42px] px-4 rounded-xl bg-rose-600 text-white text-xs font-bold shrink-0"
+                >
+                  Thử lại
+                </button>
+              </div>
             </div>
           )}
 
@@ -399,6 +522,9 @@ export default function App() {
                   onOpenManageItems={(s) => setManagingItemsSite(s)}
                   onRefresh={refreshAll}
                   onShowToast={showToast}
+                  onSyncLegacyData={handleSyncLegacyData}
+                  isSyncingLegacy={isSyncingLegacy}
+                  onOpenSqlModal={() => setShowSqlModal(true)}
                 />
               )}
 
@@ -459,6 +585,9 @@ export default function App() {
                   onOpenManageSites={() => setShowSiteModal(true)}
                   onShowToast={showToast}
                   onLogout={() => handleLogout()}
+                  onSyncLegacyData={handleSyncLegacyData}
+                  isSyncingLegacy={isSyncingLegacy}
+                  onOpenSqlModal={() => setShowSqlModal(true)}
                 />
               )}
             </>
@@ -532,6 +661,62 @@ export default function App() {
           onChanged={refreshAll}
         />
       )}
+
+      {/* SUPABASE SQL & RLS POLICY MODAL */}
+      {showSqlModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center glass-modal-backdrop p-3 sm:p-5">
+          <div className="glass-panel w-full max-w-4xl p-5 sm:p-6 max-h-[88dvh] flex flex-col gap-4 text-white">
+            <div className="flex items-start justify-between gap-3 pb-3 border-b border-white/30">
+              <div>
+                <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                  <Database className="w-5 h-5 text-teal-300" />
+                  <span>Mã SQL Tạo Bảng & Policy RLS Trên Supabase</span>
+                </h3>
+                <p className="text-xs text-white/80 mt-0.5">
+                  Dán đoạn mã SQL này vào mục SQL Editor trên Supabase Dashboard rồi nhấn Run để khởi tạo đầy đủ các bảng, View, Storage bucket và quyền đọc/ghi (authenticated).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSqlModal(false)}
+                className="min-h-[42px] min-w-[42px] rounded-xl glass-tool flex items-center justify-center shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-white/85">
+                Hỗ trợ các bảng: sites, checklist_items, inspections, inspection_results, corrective_actions, vehicle_washes, storage.objects (bucket evidence)
+              </span>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(SUPABASE_SCHEMA_AND_RLS_SQL);
+                    setCopiedSql(true);
+                    showToast('Đã sao chép toàn bộ mã SQL & Policy RLS vào bộ nhớ tạm!');
+                    window.setTimeout(() => setCopiedSql(false), 3000);
+                  } catch {
+                    showToast('Hãy bôi đen và nhấn Ctrl+C để sao chép SQL.');
+                  }
+                }}
+                className="min-h-[42px] px-4 rounded-xl btn-accent text-xs font-bold flex items-center gap-1.5"
+              >
+                {copiedSql ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                <span>{copiedSql ? 'Đã sao chép SQL!' : 'Sao chép toàn bộ SQL & RLS'}</span>
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto rounded-2xl bg-white/55 border border-white/80 p-3.5">
+              <pre className="text-xs font-mono text-slate-900 whitespace-pre-wrap break-words select-all">
+                {SUPABASE_SCHEMA_AND_RLS_SQL}
+              </pre>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+

@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import {
   Building2,
+  CloudUpload,
+  Database,
   Keyboard,
   LogOut,
   Sliders,
@@ -28,6 +30,9 @@ interface SettingsViewProps {
   onOpenManageSites: () => void;
   onShowToast: (msg: string) => void;
   onLogout: () => void;
+  onSyncLegacyData?: () => void;
+  isSyncingLegacy?: boolean;
+  onOpenSqlModal?: () => void;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
@@ -45,6 +50,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onOpenManageSites,
   onShowToast,
   onLogout,
+  onSyncLegacyData,
+  isSyncingLegacy,
+  onOpenSqlModal,
 }) => {
   const [subTab, setSubTab] = useState<'customizer' | 'system'>('customizer');
 
@@ -102,6 +110,46 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <LogOut className="w-4 h-4" />
             <span>Đăng xuất</span>
           </button>
+        </div>
+      </div>
+
+      {/* Supabase Cloud Synchronization & SQL RLS Quick Card */}
+      <div className="glass-card density-pad flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 text-base font-bold text-white">
+            <Database className="w-5 h-5 text-teal-300" />
+            <span>Đồng Bộ Cơ Sở Dữ Liệu Đám Mây Supabase & Policy RLS</span>
+          </div>
+          <p className="text-xs text-white/80">
+            Toàn bộ điểm rửa xe, hạng mục checklist, trạng thái và đường dẫn ảnh được đọc/ghi trực tiếp trên các bảng Supabase để đồng bộ trên mọi thiết bị.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          {onSyncLegacyData && (
+            <button
+              type="button"
+              onClick={onSyncLegacyData}
+              disabled={isSyncingLegacy}
+              className="min-h-[46px] px-4 rounded-2xl btn-accent text-xs sm:text-sm font-bold flex items-center gap-2 disabled:opacity-50"
+            >
+              <CloudUpload className="w-4 h-4" />
+              <span>
+                {isSyncingLegacy
+                  ? 'Đang đẩy dữ liệu...'
+                  : 'Đồng bộ dữ liệu cũ lên Supabase'}
+              </span>
+            </button>
+          )}
+          {onOpenSqlModal && (
+            <button
+              type="button"
+              onClick={onOpenSqlModal}
+              className="min-h-[46px] px-4 rounded-2xl glass-tool text-xs sm:text-sm font-bold flex items-center gap-2"
+            >
+              <Database className="w-4 h-4" />
+              <span>SQL Tạo Bảng & Policy RLS</span>
+            </button>
+          )}
         </div>
       </div>
 
