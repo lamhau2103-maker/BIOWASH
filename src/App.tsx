@@ -247,11 +247,15 @@ export default function App() {
       <header className="sticky top-0 z-30 glass-panel rounded-none border-x-0 border-t-0 px-3 sm:px-6 h-14 flex items-center justify-between gap-2 sm:gap-4">
         {/* Zone 1: Single-line Brand Wordmark */}
         <div className="flex items-center gap-2.5 shrink-0">
-          <div className="w-8 h-8 rounded-xl btn-accent flex items-center justify-center text-white">
-            <ShieldCheck className="w-5 h-5" />
+          <div className="w-9 h-9 rounded-xl bg-white border border-white/90 shadow-sm flex items-center justify-center overflow-hidden p-0.5 shrink-0">
+            <img
+              src="/assets/aistudio/23-logo-thai-viet-corporation_c66d41c5.jpeg"
+              alt="Thái Việt Corporation Logo"
+              className="w-full h-full object-contain"
+            />
           </div>
           <span className="font-bold text-sm sm:text-base tracking-tight whitespace-nowrap shrink-0">
-            BIO-WASH CHECK
+            Thái Việt Corporation
           </span>
         </div>
 
@@ -716,6 +720,14 @@ export default function App() {
           </div>
         </div>
       )}
+      {/* Author signature at bottom-right corner */}
+      <div
+        className={`fixed right-3.5 z-30 pointer-events-none select-none px-2.5 py-1 rounded-lg bg-white/45 backdrop-blur-md border border-white/65 shadow-sm text-[11px] font-semibold text-slate-700 tracking-wide ${
+          deviceType === 'mobile' ? 'bottom-20' : 'bottom-2.5'
+        }`}
+      >
+        by Phuc Hau HR
+      </div>
     </div>
   );
 }

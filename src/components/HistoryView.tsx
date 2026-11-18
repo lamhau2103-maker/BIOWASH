@@ -162,7 +162,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
 
   const handleShare = async () => {
     const ok = await shareReport(
-      'Báo cáo BIO-WASH CHECK',
+      'Báo cáo Thái Việt Corporation',
       `Tổng hợp ${filteredInspections.length} lượt kiểm tra điểm và ${filteredWashes.length} lượt rửa xe sát khuẩn.`
     );
     if (ok) {

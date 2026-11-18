@@ -335,7 +335,7 @@ export const PWAInstallButton: React.FC<{ compact?: boolean }> = ({ compact = fa
           <div className="fixed inset-0 z-50 flex items-center justify-center glass-modal-backdrop p-4">
             <div className="glass-panel w-full max-w-sm rounded-3xl p-6 space-y-4 text-slate-900">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold">Cài đặt BIO-WASH CHECK trên iOS</h3>
+                <h3 className="text-base font-bold">Cài đặt Thái Việt Corporation trên iOS</h3>
                 <button
                   type="button"
                   onClick={() => setShowIOSGuide(false)}

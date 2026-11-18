@@ -633,9 +633,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   if (activeSites.length === 0) {
     return (
       <div className="glass-card density-pad text-center space-y-4 py-10">
-        <ShieldAlert className="w-14 h-14 text-teal-300 mx-auto" />
+        <div className="w-20 h-20 rounded-2xl bg-white border border-white/90 shadow-md flex items-center justify-center overflow-hidden p-1.5 mx-auto">
+          <img
+            src="/assets/aistudio/23-logo-thai-viet-corporation_c66d41c5.jpeg"
+            alt="Thái Việt Corporation Logo"
+            className="w-full h-full object-contain"
+          />
+        </div>
         <h2 className="fluid-title font-bold text-white">
-          Chào mừng đến với BIO-WASH CHECK
+          Chào mừng đến với Thái Việt Corporation
         </h2>
         <p className="text-sm text-white/80 max-w-md mx-auto">
           Hệ thống đang đọc trực tiếp từ cơ sở dữ liệu Supabase. Hãy thêm điểm rửa xe đầu tiên hoặc đồng bộ dữ liệu cũ từ trình duyệt lên Supabase.
