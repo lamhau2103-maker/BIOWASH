@@ -35,9 +35,20 @@ export interface Site {
   is_active: boolean;
 }
 
+export interface ChecklistGroup {
+  id: string;
+  site_id: string;
+  title: string;
+  name?: string;
+  sort_order: number;
+  is_active: boolean;
+  created_at?: string;
+}
+
 export interface ChecklistItem {
   id: string;
   site_id: string;
+  group_id?: string | null;
   group_name: string;
   title: string;
   is_critical: boolean;
@@ -180,6 +191,15 @@ export const ACTION_STATUS_LABELS: Record<ActionStatus, string> = {
   in_progress: 'Đang xử lý',
   closed: 'Đã đóng',
 };
+
+export const DEFAULT_GROUP_TITLES = [
+  'Vị trí & phân vùng',
+  'Hạ tầng rửa xe',
+  'Thiết bị',
+  'Hóa chất sát khuẩn',
+  'Người & vệ sinh cá nhân',
+  'Hồ sơ & giám sát',
+] as const;
 
 export const CHECKLIST_GROUPS = [
   '1) Vị trí & phân vùng',

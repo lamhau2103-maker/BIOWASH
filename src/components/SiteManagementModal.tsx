@@ -167,7 +167,7 @@ export const SiteManagementModal: React.FC<SiteManagementModalProps> = ({
               Quản lý Điểm Rửa Xe Sát Khuẩn
             </h2>
             <p className="text-xs text-slate-700">
-              Khi tạo điểm mới, hệ thống tự động sao chép 6 nhóm hạng mục chuẩn An Toàn Sinh Học.
+              Khi tạo điểm mới, hệ thống tự động khởi tạo khung tiêu đề lớn và hạng mục mẫu chuẩn (Admin có thể tùy chỉnh riêng cho từng điểm).
             </p>
           </div>
           <button
@@ -303,11 +303,11 @@ export const SiteManagementModal: React.FC<SiteManagementModalProps> = ({
                     className="w-full min-h-[48px] px-3.5 rounded-xl glass-tool text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500"
                   >
                     <option value="">
-                      Sao chép từ mẫu chuẩn 6 nhóm An Toàn Sinh Học (20 hạng mục)
+                      Khởi tạo từ khung mẫu chuẩn An Toàn Sinh Học
                     </option>
                     {sites.map((s) => (
                       <option key={s.id} value={s.id}>
-                        Sao chép hạng mục từ điểm: {s.name}
+                        Sao chép tiêu đề & hạng mục từ điểm: {s.name}
                       </option>
                     ))}
                   </select>

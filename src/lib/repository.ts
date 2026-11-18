@@ -1,8 +1,10 @@
 import { supabase } from './supabase';
 import { enqueueOfflineMutation, flushOfflineQueue } from './offlineQueue';
 import {
+  ChecklistGroup,
   ChecklistItem,
   CorrectiveAction,
+  DEFAULT_GROUP_TITLES,
   DEFAULT_TEMPLATE_ITEMS,
   Inspection,
   InspectionResultRow,
@@ -12,6 +14,10 @@ import {
   SiteOverview,
   VehicleWash,
 } from '../types/database';
+
+function cleanGroupTitle(raw: string): string {
+  return raw.replace(/^\d+[\)\.\-\:]\s*/, '').trim();
+}
 
 interface LegacyAdminOverlayState {
   sitesCreated?: Site[];
@@ -462,12 +468,7 @@ export const repository = {
 
   // 2. Overview & Sites (Read/Write directly from/to Supabase)
   async getSiteOverview(): Promise<SiteOverview[]> {
-    const { data: viewData, error: viewErr } = await supabase.from('v_site_overview').select('*');
-    if (!viewErr && viewData && viewData.length > 0) {
-      return viewData as SiteOverview[];
-    }
-
-    // Compute overview directly from Supabase tables if v_site_overview is empty or not created yet
+    // Compute overview directly from active checklist_items & corrective_actions so counts/scores update immediately
     const [allSites, allItems, allActions] = await Promise.all([
       this.getSites(false),
       this.getChecklistItems(),
@@ -548,9 +549,11 @@ export const repository = {
 
     const newSite = data as Site;
 
-    // Copy checklist items either from another site or from default 6-group template
+    // Copy checklist groups & items either from another site or from default 6-group template
+    let sourceGroupTitles: string[] = [...DEFAULT_GROUP_TITLES];
     let itemsToInsert: Array<{
       site_id: string;
+      group_id?: string | null;
       group_name: string;
       title: string;
       is_critical: boolean;
@@ -560,13 +563,29 @@ export const repository = {
     }> = [];
 
     if (copyFromSiteId) {
-      const sourceItems = (await this.getChecklistItems(copyFromSiteId)).filter(
-        (it) => it.is_active
-      );
+      const [sourceGroups, sourceAllItems] = await Promise.all([
+        this.getChecklistGroups(copyFromSiteId),
+        this.getChecklistItems(copyFromSiteId),
+      ]);
+      const sourceItems = sourceAllItems.filter((it) => it.is_active);
+      if (sourceGroups.length > 0) {
+        sourceGroupTitles = sourceGroups.map((g) => cleanGroupTitle(g.title));
+      } else if (sourceItems.length > 0) {
+        const seen = new Set<string>();
+        sourceGroupTitles = [];
+        sourceItems.forEach((it) => {
+          const cl = cleanGroupTitle(it.group_name);
+          if (cl && !seen.has(cl.toLowerCase())) {
+            seen.add(cl.toLowerCase());
+            sourceGroupTitles.push(cl);
+          }
+        });
+      }
+
       if (sourceItems.length > 0) {
         itemsToInsert = sourceItems.map((it, idx) => ({
           site_id: newSite.id,
-          group_name: it.group_name,
+          group_name: cleanGroupTitle(it.group_name) || it.group_name,
           title: it.title,
           is_critical: it.is_critical,
           sort_order: it.sort_order ?? idx + 1,
@@ -579,7 +598,7 @@ export const repository = {
     if (itemsToInsert.length === 0) {
       itemsToInsert = DEFAULT_TEMPLATE_ITEMS.map((it) => ({
         site_id: newSite.id,
-        group_name: it.group_name,
+        group_name: cleanGroupTitle(it.group_name) || it.group_name,
         title: it.title,
         is_critical: it.is_critical,
         sort_order: it.sort_order,
@@ -588,7 +607,39 @@ export const repository = {
       }));
     }
 
-    const { error: itemsErr } = await supabase.from('checklist_items').insert(itemsToInsert);
+    // Create initial checklist_groups for the new site
+    const groupMapByNorm = new Map<string, string>();
+    for (let i = 0; i < sourceGroupTitles.length; i++) {
+      const gTitle = cleanGroupTitle(sourceGroupTitles[i]);
+      if (!gTitle) continue;
+      try {
+        const createdGrp = await this.createChecklistGroup({
+          site_id: newSite.id,
+          title: gTitle,
+          sort_order: i + 1,
+        });
+        if (createdGrp?.id && !createdGrp.id.startsWith('virtual_')) {
+          groupMapByNorm.set(gTitle.toLowerCase(), createdGrp.id);
+        }
+      } catch {
+        // Ignore if checklist_groups table not yet migrated
+      }
+    }
+
+    // Attach group_id to items if groups were created in DB
+    const rowsWithGroupId = itemsToInsert.map((it) => {
+      const norm = cleanGroupTitle(it.group_name).toLowerCase();
+      const gId = groupMapByNorm.get(norm);
+      return gId ? { ...it, group_id: gId } : it;
+    });
+
+    let { error: itemsErr } = await supabase.from('checklist_items').insert(rowsWithGroupId);
+    if (itemsErr && groupMapByNorm.size > 0) {
+      // Fallback if group_id column hasn't been added to checklist_items yet
+      const fallbackRows = itemsToInsert.map(({ group_id: _gid, ...rest }) => rest);
+      const retry = await supabase.from('checklist_items').insert(fallbackRows);
+      itemsErr = retry.error;
+    }
     if (itemsErr) {
       throw new Error(`Đã tạo điểm nhưng lỗi tạo bộ hạng mục trên Supabase: ${itemsErr.message}`);
     }
@@ -618,13 +669,18 @@ export const repository = {
     await supabase.from('inspections').delete().eq('site_id', siteId);
     await supabase.from('vehicle_washes').delete().eq('site_id', siteId);
     await supabase.from('checklist_items').delete().eq('site_id', siteId);
+    try {
+      await supabase.from('checklist_groups').delete().eq('site_id', siteId);
+    } catch {
+      // ignore if table not created yet
+    }
     const { error } = await supabase.from('sites').delete().eq('id', siteId);
     if (error) {
       throw new Error(`Không thể xóa điểm rửa xe trên Supabase: ${error.message}`);
     }
   },
 
-  // 3. Checklist Items (Read/Write directly from/to Supabase)
+  // 3. Checklist Items & Checklist Groups (Read/Write directly from/to Supabase)
   async getChecklistItems(siteId?: string): Promise<ChecklistItem[]> {
     let query = supabase
       .from('checklist_items')
@@ -644,22 +700,44 @@ export const repository = {
 
   async createChecklistItem(payload: {
     site_id: string;
+    group_id?: string | null;
     group_name: string;
     title: string;
     is_critical: boolean;
     sort_order: number;
   }): Promise<ChecklistItem> {
     const nowIso = new Date().toISOString();
-    const { data, error } = await supabase
+    const insertRow: Record<string, unknown> = {
+      site_id: payload.site_id,
+      group_name: payload.group_name,
+      title: payload.title,
+      is_critical: payload.is_critical,
+      sort_order: payload.sort_order,
+      is_active: true,
+      current_status: 'pending',
+      updated_at: nowIso,
+    };
+    if (payload.group_id && !payload.group_id.startsWith('virtual_')) {
+      insertRow.group_id = payload.group_id;
+    }
+
+    let { data, error } = await supabase
       .from('checklist_items')
-      .insert({
-        ...payload,
-        is_active: true,
-        current_status: 'pending',
-        updated_at: nowIso,
-      })
+      .insert(insertRow)
       .select('*')
       .single();
+
+    if (error && insertRow.group_id) {
+      // Retry without group_id in case SQL column group_id wasn't migrated yet
+      delete insertRow.group_id;
+      const retry = await supabase
+        .from('checklist_items')
+        .insert(insertRow)
+        .select('*')
+        .single();
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error || !data) {
       throw new Error(`Không thể thêm hạng mục vào Supabase: ${error?.message || 'Lỗi RLS'}`);
@@ -673,6 +751,7 @@ export const repository = {
       Pick<
         ChecklistItem,
         | 'title'
+        | 'group_id'
         | 'group_name'
         | 'is_critical'
         | 'sort_order'
@@ -682,10 +761,13 @@ export const repository = {
       >
     >
   ): Promise<ChecklistItem> {
-    const updateData = {
+    const updateData: Record<string, unknown> = {
       ...payload,
       updated_at: new Date().toISOString(),
     };
+    if (typeof updateData.group_id === 'string' && updateData.group_id.startsWith('virtual_')) {
+      delete updateData.group_id;
+    }
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       await enqueueOfflineMutation({
         table: 'checklist_items',
@@ -697,12 +779,24 @@ export const repository = {
       return { id: itemId, ...updateData } as ChecklistItem;
     }
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('checklist_items')
       .update(updateData)
       .eq('id', itemId)
       .select('*')
       .single();
+
+    if (error && 'group_id' in updateData) {
+      delete updateData.group_id;
+      const retry = await supabase
+        .from('checklist_items')
+        .update(updateData)
+        .eq('id', itemId)
+        .select('*')
+        .single();
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error || !data) {
       throw new Error(`Không thể cập nhật hạng mục trên Supabase: ${error?.message || 'Lỗi RLS'}`);
@@ -719,7 +813,7 @@ export const repository = {
     }
   },
 
-  // Smart Delete: Soft delete (is_active = false) if item has history in inspection_results, otherwise Hard delete
+  // Smart Delete Item: Soft delete (is_active = false) if item has history in inspection_results, otherwise Hard delete
   async smartDeleteChecklistItem(itemId: string): Promise<{ mode: 'soft' | 'hard' }> {
     const { count, error: countErr } = await supabase
       .from('inspection_results')
@@ -734,17 +828,17 @@ export const repository = {
     await supabase.from('corrective_actions').delete().eq('item_id', itemId);
     const { error: delErr } = await supabase.from('checklist_items').delete().eq('id', itemId);
     if (delErr) {
-      // Fallback to soft delete if FK constraint prevents hard delete
       await this.updateChecklistItem(itemId, { is_active: false });
       return { mode: 'soft' };
     }
     return { mode: 'hard' };
   },
 
-  // Optional checklist_groups table support (gracefully falls back if table not yet created)
+  // Get active checklist_groups for a site (and auto-seed from existing site items if needed)
   async getChecklistGroups(
-    siteId?: string
-  ): Promise<Array<{ id: string; site_id: string; name: string; sort_order: number; is_active: boolean }>> {
+    siteId?: string,
+    siteItems?: ChecklistItem[]
+  ): Promise<ChecklistGroup[]> {
     try {
       let query = supabase
         .from('checklist_groups')
@@ -756,73 +850,435 @@ export const repository = {
       }
       const { data, error } = await query;
       if (error || !data) return [];
-      return data as Array<{
-        id: string;
-        site_id: string;
-        name: string;
-        sort_order: number;
-        is_active: boolean;
-      }>;
+
+      const normalizeRow = (r: Record<string, unknown>): ChecklistGroup => {
+        const rawTitle = String(r.title || r.name || '');
+        const cl = cleanGroupTitle(rawTitle) || rawTitle.trim();
+        return {
+          id: String(r.id),
+          site_id: String(r.site_id),
+          title: cl,
+          name: cl,
+          sort_order: Number(r.sort_order ?? 1),
+          is_active: Boolean(r.is_active ?? true),
+          created_at: r.created_at ? String(r.created_at) : undefined,
+        };
+      };
+
+      const groups = (data as Array<Record<string, unknown>>).map(normalizeRow);
+
+      // Auto-migrate existing items' groups into checklist_groups for this site if missing
+      if (siteId && siteItems && siteItems.length > 0) {
+        const activeSiteItems = siteItems
+          .filter((it) => it.site_id === siteId && it.is_active)
+          .sort((a, b) => a.sort_order - b.sort_order);
+
+        const existingNorms = new Set(groups.map((g) => g.title.toLowerCase()));
+        const missingTitles: string[] = [];
+
+        activeSiteItems.forEach((it) => {
+          const cl = cleanGroupTitle(it.group_name) || it.group_name.trim();
+          if (cl && !existingNorms.has(cl.toLowerCase())) {
+            existingNorms.add(cl.toLowerCase());
+            missingTitles.push(cl);
+          }
+        });
+
+        if (missingTitles.length > 0) {
+          let nextOrder =
+            groups.length > 0 ? Math.max(...groups.map((g) => g.sort_order)) + 1 : 1;
+          for (const mTitle of missingTitles) {
+            try {
+              const created = await this.createChecklistGroup({
+                site_id: siteId,
+                title: mTitle,
+                sort_order: nextOrder++,
+              });
+              if (created && !created.id.startsWith('virtual_')) {
+                groups.push(created);
+              }
+            } catch {
+              // ignore
+            }
+          }
+        }
+
+        // Link items missing group_id to their matching group
+        const normToGroupId = new Map<string, string>();
+        groups.forEach((g) => {
+          if (!g.id.startsWith('virtual_')) {
+            normToGroupId.set(g.title.toLowerCase(), g.id);
+          }
+        });
+
+        for (const it of activeSiteItems) {
+          if (!it.group_id) {
+            const cl = (cleanGroupTitle(it.group_name) || it.group_name.trim()).toLowerCase();
+            const targetGid = normToGroupId.get(cl);
+            if (targetGid) {
+              supabase
+                .from('checklist_items')
+                .update({ group_id: targetGid })
+                .eq('id', it.id)
+                .then(() => {});
+            }
+          }
+        }
+      }
+
+      groups.sort((a, b) => a.sort_order - b.sort_order);
+      return groups;
     } catch {
       return [];
     }
+  },
+
+  async createChecklistGroup(params: {
+    site_id: string;
+    title: string;
+    sort_order: number;
+  }): Promise<ChecklistGroup> {
+    const cleanTitle = cleanGroupTitle(params.title) || params.title.trim();
+    if (!cleanTitle) {
+      throw new Error('Tên tiêu đề lớn không được để trống.');
+    }
+
+    // Check if an active group with the same title already exists for this site
+    try {
+      const existingList = await this.getChecklistGroups(params.site_id);
+      const found = existingList.find(
+        (g) => g.title.toLowerCase() === cleanTitle.toLowerCase()
+      );
+      if (found) return found;
+    } catch {
+      // ignore
+    }
+
+    // Try inserting with both title and name, then fallback to title only or name only
+    const attempts: Array<Record<string, unknown>> = [
+      {
+        site_id: params.site_id,
+        title: cleanTitle,
+        name: cleanTitle,
+        sort_order: params.sort_order,
+        is_active: true,
+      },
+      {
+        site_id: params.site_id,
+        title: cleanTitle,
+        sort_order: params.sort_order,
+        is_active: true,
+      },
+      {
+        site_id: params.site_id,
+        name: cleanTitle,
+        sort_order: params.sort_order,
+        is_active: true,
+      },
+    ];
+
+    for (const payload of attempts) {
+      const { data, error } = await supabase
+        .from('checklist_groups')
+        .insert(payload)
+        .select('*')
+        .single();
+      if (!error && data) {
+        const row = data as Record<string, unknown>;
+        return {
+          id: String(row.id),
+          site_id: String(row.site_id),
+          title: cleanTitle,
+          name: cleanTitle,
+          sort_order: Number(row.sort_order ?? params.sort_order),
+          is_active: true,
+          created_at: row.created_at ? String(row.created_at) : new Date().toISOString(),
+        };
+      }
+    }
+
+    // Return virtual group if checklist_groups table is not yet created in Supabase
+    return {
+      id: `virtual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      site_id: params.site_id,
+      title: cleanTitle,
+      name: cleanTitle,
+      sort_order: params.sort_order,
+      is_active: true,
+      created_at: new Date().toISOString(),
+    };
   },
 
   async ensureChecklistGroup(params: {
     site_id: string;
     name: string;
     sort_order: number;
-  }): Promise<void> {
-    try {
-      const cleanName = params.name.replace(/^\d+[\)\.\-\:]\s*/, '').trim();
-      if (!cleanName) return;
-      const { data: existing } = await supabase
-        .from('checklist_groups')
-        .select('id')
-        .eq('site_id', params.site_id)
-        .ilike('name', cleanName)
-        .maybeSingle();
+  }): Promise<ChecklistGroup> {
+    return this.createChecklistGroup({
+      site_id: params.site_id,
+      title: params.name,
+      sort_order: params.sort_order,
+    });
+  },
 
-      if (!existing?.id) {
-        await supabase.from('checklist_groups').insert({
-          site_id: params.site_id,
-          name: cleanName,
-          sort_order: params.sort_order,
-          is_active: true,
+  // Rename a Checklist Group in-place without altering historical inspection_results
+  async renameChecklistGroup(params: {
+    groupId?: string;
+    siteId: string;
+    oldCleanName: string;
+    oldRawName: string;
+    newTitle: string;
+    itemIds: string[];
+  }): Promise<void> {
+    const cleanNew = cleanGroupTitle(params.newTitle) || params.newTitle.trim();
+    if (!cleanNew) {
+      throw new Error('Tên tiêu đề lớn không được để trống.');
+    }
+
+    // 1. Update checklist_groups table if groupId is a real DB UUID
+    if (params.groupId && !params.groupId.startsWith('virtual_')) {
+      const updateAttempts: Array<Record<string, unknown>> = [
+        { title: cleanNew, name: cleanNew },
+        { title: cleanNew },
+        { name: cleanNew },
+      ];
+      for (const patch of updateAttempts) {
+        const { error } = await supabase
+          .from('checklist_groups')
+          .update(patch)
+          .eq('id', params.groupId);
+        if (!error) break;
+      }
+    } else {
+      // Ensure group exists in checklist_groups
+      try {
+        const existingGroups = await this.getChecklistGroups(params.siteId);
+        const match = existingGroups.find(
+          (g) => g.title.toLowerCase() === params.oldCleanName.toLowerCase()
+        );
+        if (match && !match.id.startsWith('virtual_')) {
+          await this.renameChecklistGroup({
+            ...params,
+            groupId: match.id,
+          });
+          return;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // 2. Update checklist_items.group_name for items belonging to this group
+    // Note: Do NOT update inspection_results so saved historical inspections keep their original group_name!
+    if (params.itemIds.length > 0) {
+      await supabase
+        .from('checklist_items')
+        .update({ group_name: cleanNew, updated_at: new Date().toISOString() })
+        .in('id', params.itemIds);
+    } else {
+      await supabase
+        .from('checklist_items')
+        .update({ group_name: cleanNew, updated_at: new Date().toISOString() })
+        .eq('site_id', params.siteId)
+        .eq('group_name', params.oldRawName);
+    }
+  },
+
+  // Reorder Checklist Groups (Up / Down)
+  async reorderChecklistGroups(params: {
+    siteId: string;
+    orderedGroups: Array<{
+      id?: string;
+      cleanName: string;
+      rawGroupName: string;
+      itemIds: string[];
+    }>;
+  }): Promise<void> {
+    // 1. Update sort_order in checklist_groups
+    for (let i = 0; i < params.orderedGroups.length; i++) {
+      const grp = params.orderedGroups[i];
+      const newOrder = i + 1;
+      if (grp.id && !grp.id.startsWith('virtual_')) {
+        await supabase
+          .from('checklist_groups')
+          .update({ sort_order: newOrder })
+          .eq('id', grp.id);
+      } else {
+        await this.createChecklistGroup({
+          site_id: params.siteId,
+          title: grp.cleanName,
+          sort_order: newOrder,
         });
       }
-    } catch {
-      // Ignore if checklist_groups table has not been created yet; group_name on checklist_items persists it
     }
+
+    // 2. Also update sort_order of checklist_items so item order stays aligned with group order
+    let runningItemOrder = 1;
+    for (const grp of params.orderedGroups) {
+      for (const itemId of grp.itemIds) {
+        const orderToSet = runningItemOrder++;
+        await supabase
+          .from('checklist_items')
+          .update({ sort_order: orderToSet })
+          .eq('id', itemId);
+      }
+    }
+  },
+
+  // Smart Delete Checklist Group: Soft delete (is_active = false) if group/items have history in inspection_results, else Hard delete
+  async smartDeleteChecklistGroup(params: {
+    groupId?: string;
+    siteId: string;
+    cleanName: string;
+    rawGroupName: string;
+    itemIds: string[];
+  }): Promise<{ mode: 'soft' | 'hard' }> {
+    let hasHistory = false;
+
+    if (params.itemIds.length > 0) {
+      const { count, error } = await supabase
+        .from('inspection_results')
+        .select('id', { count: 'exact', head: true })
+        .in('item_id', params.itemIds);
+      if (!error && count !== null && count > 0) {
+        hasHistory = true;
+      }
+    }
+
+    if (!hasHistory) {
+      const { count: grpCount, error: grpErr } = await supabase
+        .from('inspection_results')
+        .select('id', { count: 'exact', head: true })
+        .eq('site_id', params.siteId)
+        .or(`group_name.eq.${params.rawGroupName},group_name.ilike.%${params.cleanName}%`);
+      if (!grpErr && grpCount !== null && grpCount > 0) {
+        hasHistory = true;
+      }
+    }
+
+    const nowIso = new Date().toISOString();
+
+    if (hasHistory) {
+      // Soft delete all items in the group + the group itself
+      if (params.itemIds.length > 0) {
+        await supabase
+          .from('checklist_items')
+          .update({ is_active: false, updated_at: nowIso })
+          .in('id', params.itemIds);
+      }
+      if (params.groupId && !params.groupId.startsWith('virtual_')) {
+        await supabase
+          .from('checklist_groups')
+          .update({ is_active: false })
+          .eq('id', params.groupId);
+      }
+      return { mode: 'soft' };
+    }
+
+    // Hard delete if no inspection history exists
+    if (params.itemIds.length > 0) {
+      await supabase.from('corrective_actions').delete().in('item_id', params.itemIds);
+      const { error: delItemsErr } = await supabase
+        .from('checklist_items')
+        .delete()
+        .in('id', params.itemIds);
+      if (delItemsErr) {
+        // Fallback to soft delete if FK constraint blocks deletion
+        await supabase
+          .from('checklist_items')
+          .update({ is_active: false, updated_at: nowIso })
+          .in('id', params.itemIds);
+        if (params.groupId && !params.groupId.startsWith('virtual_')) {
+          await supabase
+            .from('checklist_groups')
+            .update({ is_active: false })
+            .eq('id', params.groupId);
+        }
+        return { mode: 'soft' };
+      }
+    }
+
+    if (params.groupId && !params.groupId.startsWith('virtual_')) {
+      const { error: delGrpErr } = await supabase
+        .from('checklist_groups')
+        .delete()
+        .eq('id', params.groupId);
+      if (delGrpErr) {
+        await supabase
+          .from('checklist_groups')
+          .update({ is_active: false })
+          .eq('id', params.groupId);
+        return { mode: 'soft' };
+      }
+    }
+
+    return { mode: 'hard' };
   },
 
   async copyDefaultItemsToSite(siteId: string, sourceSiteId?: string): Promise<void> {
     let itemsToCopy = DEFAULT_TEMPLATE_ITEMS;
+    let groupTitlesToCopy: string[] = [...DEFAULT_GROUP_TITLES];
+
     if (sourceSiteId) {
-      const sourceItems = (await this.getChecklistItems(sourceSiteId)).filter(
-        (it) => it.is_active
-      );
+      const [sourceGroups, sourceAllItems] = await Promise.all([
+        this.getChecklistGroups(sourceSiteId),
+        this.getChecklistItems(sourceSiteId),
+      ]);
+      const sourceItems = sourceAllItems.filter((it) => it.is_active);
+      if (sourceGroups.length > 0) {
+        groupTitlesToCopy = sourceGroups.map((g) => cleanGroupTitle(g.title));
+      }
       if (sourceItems.length > 0) {
         itemsToCopy = sourceItems.map((it) => ({
-          group_name: it.group_name,
+          group_name: cleanGroupTitle(it.group_name) || it.group_name,
           title: it.title,
           is_critical: it.is_critical,
           sort_order: it.sort_order,
         }));
       }
     }
+
+    const groupMap = new Map<string, string>();
+    for (let i = 0; i < groupTitlesToCopy.length; i++) {
+      const gTitle = cleanGroupTitle(groupTitlesToCopy[i]);
+      if (!gTitle) continue;
+      try {
+        const grp = await this.createChecklistGroup({
+          site_id: siteId,
+          title: gTitle,
+          sort_order: i + 1,
+        });
+        if (grp?.id && !grp.id.startsWith('virtual_')) {
+          groupMap.set(gTitle.toLowerCase(), grp.id);
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     const nowIso = new Date().toISOString();
-    const rows = itemsToCopy.map((it, idx) => ({
-      site_id: siteId,
-      group_name: it.group_name,
-      title: it.title,
-      is_critical: it.is_critical,
-      sort_order: it.sort_order ?? idx + 1,
-      is_active: true,
-      current_status: 'pending' as const,
-      updated_at: nowIso,
-    }));
-    const { error } = await supabase.from('checklist_items').insert(rows);
+    const rows = itemsToCopy.map((it, idx) => {
+      const cleanG = cleanGroupTitle(it.group_name) || it.group_name;
+      const gId = groupMap.get(cleanG.toLowerCase());
+      return {
+        site_id: siteId,
+        ...(gId ? { group_id: gId } : {}),
+        group_name: cleanG,
+        title: it.title,
+        is_critical: it.is_critical,
+        sort_order: it.sort_order ?? idx + 1,
+        is_active: true,
+        current_status: 'pending' as const,
+        updated_at: nowIso,
+      };
+    });
+
+    let { error } = await supabase.from('checklist_items').insert(rows);
+    if (error && groupMap.size > 0) {
+      const fallbackRows = rows.map(({ group_id: _gid, ...rest }) => rest);
+      const retry = await supabase.from('checklist_items').insert(fallbackRows);
+      error = retry.error;
+    }
     if (error) {
       throw new Error(`Không thể sao chép bộ hạng mục lên Supabase: ${error.message}`);
     }

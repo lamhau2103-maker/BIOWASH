@@ -103,7 +103,7 @@ export const DEFAULT_DASHBOARD_WIDGETS: DashboardWidgetConfig[] = [
   { id: 'chart_trend', label: 'Biểu đồ 1: Xu hướng điểm tuân thủ', visible: true, size: 'medium' },
   { id: 'chart_ranking', label: 'Biểu đồ 2: Xếp hạng các điểm rửa xe', visible: true, size: 'medium' },
   { id: 'chart_top_violations', label: 'Biểu đồ 3: Top 10 hạng mục hay vi phạm', visible: true, size: 'medium' },
-  { id: 'chart_group_donut', label: 'Biểu đồ 4: Donut tỷ trọng lỗi theo 6 nhóm', visible: true, size: 'medium' },
+  { id: 'chart_group_donut', label: 'Biểu đồ 4: Donut tỷ trọng lỗi theo nhóm hạng mục', visible: true, size: 'medium' },
   { id: 'chart_vehicles', label: 'Biểu đồ 5: Lượt xe theo loại & Đạt/Không đạt', visible: true, size: 'medium' },
   { id: 'chart_heatmap_sla', label: 'Biểu đồ 6 & 7: Heatmap Điểm × Tuần & Hiệu suất đóng lỗi', visible: true, size: 'medium' },
 ];

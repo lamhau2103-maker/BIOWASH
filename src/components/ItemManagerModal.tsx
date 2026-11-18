@@ -42,13 +42,19 @@ export const ItemManagerModal: React.FC<ItemManagerModalProps> = ({
   const activeItems = siteItems.filter((i) => i.is_active);
   const hiddenItems = siteItems.filter((i) => !i.is_active);
 
-  const [dbGroups, setDbGroups] = useState<Array<{ name: string; sort_order: number }>>([]);
+  const [dbGroups, setDbGroups] = useState<Array<{ id: string; title: string; sort_order: number }>>([]);
 
   useEffect(() => {
     let mounted = true;
-    repository.getChecklistGroups(site.id).then((rows) => {
+    repository.getChecklistGroups(site.id, siteItems).then((rows) => {
       if (!mounted) return;
-      setDbGroups(rows.map((r) => ({ name: r.name, sort_order: r.sort_order })));
+      setDbGroups(
+        rows.map((r) => ({
+          id: r.id,
+          title: r.title || r.name || '',
+          sort_order: r.sort_order,
+        }))
+      );
     });
     return () => {
       mounted = false;
@@ -56,20 +62,28 @@ export const ItemManagerModal: React.FC<ItemManagerModalProps> = ({
   }, [site.id, items.length]);
 
   const dynamicGroups = useMemo(() => {
-    const map = new Map<string, { normKey: string; cleanName: string; rawGroupName: string }>();
+    const map = new Map<
+      string,
+      { id?: string; normKey: string; cleanName: string; rawGroupName: string }
+    >();
     dbGroups.forEach((g) => {
-      const clean = stripGroupPrefix(g.name);
+      const clean = stripGroupPrefix(g.title);
       if (!clean) return;
       const norm = clean.toLowerCase();
       if (!map.has(norm)) {
-        map.set(norm, { normKey: norm, cleanName: clean, rawGroupName: clean });
+        map.set(norm, { id: g.id, normKey: norm, cleanName: clean, rawGroupName: clean });
       }
     });
     activeItems.forEach((it) => {
       const clean = stripGroupPrefix(it.group_name) || it.group_name.trim();
       const norm = clean.toLowerCase();
       if (!map.has(norm)) {
-        map.set(norm, { normKey: norm, cleanName: clean, rawGroupName: it.group_name });
+        map.set(norm, {
+          id: it.group_id || undefined,
+          normKey: norm,
+          cleanName: clean,
+          rawGroupName: it.group_name,
+        });
       }
     });
     return Array.from(map.values());
@@ -111,25 +125,31 @@ export const ItemManagerModal: React.FC<ItemManagerModalProps> = ({
 
     let targetGroupRaw = '';
     let targetGroupNorm = '';
+    let targetGroupId: string | null = null;
     const isCreatingGroup = newGroup === NEW_GROUP_OPTION_VALUE;
 
     if (isCreatingGroup) {
       const cleanNew = stripGroupPrefix(customGroupName.trim());
       if (!cleanNew) {
-        setErrMsg('Vui lòng nhập tên hạng mục lớn (nhóm) mới.');
+        setErrMsg('Vui lòng nhập tên tiêu đề lớn mới.');
         return;
       }
       targetGroupNorm = cleanNew.toLowerCase();
       const found = dynamicGroups.find((g) => g.normKey === targetGroupNorm);
-      targetGroupRaw = found ? found.rawGroupName : cleanNew;
+      if (found) {
+        setErrMsg(`Cảnh báo: Tiêu đề lớn "${cleanNew}" đã tồn tại trong điểm này!`);
+        return;
+      }
+      targetGroupRaw = cleanNew;
     } else {
       const found = dynamicGroups.find((g) => g.normKey === newGroup);
       if (!found) {
-        setErrMsg('Vui lòng chọn nhóm hạng mục.');
+        setErrMsg('Vui lòng chọn tiêu đề lớn.');
         return;
       }
       targetGroupRaw = found.rawGroupName;
       targetGroupNorm = found.normKey;
+      targetGroupId = found.id || null;
     }
 
     const isDuplicate = activeItems.some((it) => {
@@ -147,16 +167,18 @@ export const ItemManagerModal: React.FC<ItemManagerModalProps> = ({
     setErrMsg(null);
     try {
       if (isCreatingGroup) {
-        await repository.ensureChecklistGroup({
+        const createdG = await repository.createChecklistGroup({
           site_id: site.id,
-          name: targetGroupRaw,
+          title: targetGroupRaw,
           sort_order: dynamicGroups.length + 1,
         });
+        targetGroupId = createdG.id;
       }
 
       if (editingItem) {
         await repository.updateChecklistItem(editingItem.id, {
           title: trimmedTitle,
+          group_id: targetGroupId,
           group_name: targetGroupRaw,
           is_critical: newCritical,
         });
@@ -166,6 +188,7 @@ export const ItemManagerModal: React.FC<ItemManagerModalProps> = ({
           siteItems.length > 0 ? Math.max(...siteItems.map((i) => i.sort_order)) + 1 : 1;
         await repository.createChecklistItem({
           site_id: site.id,
+          group_id: targetGroupId,
           group_name: targetGroupRaw,
           title: trimmedTitle,
           is_critical: newCritical,
@@ -325,14 +348,14 @@ export const ItemManagerModal: React.FC<ItemManagerModalProps> = ({
                         {idx + 1}) {g.cleanName}
                       </option>
                     ))}
-                    <option value={NEW_GROUP_OPTION_VALUE}>＋ Tạo hạng mục lớn mới…</option>
+                    <option value={NEW_GROUP_OPTION_VALUE}>＋ Tạo tiêu đề lớn mới…</option>
                   </select>
                   {newGroup === NEW_GROUP_OPTION_VALUE && (
                     <input
                       type="text"
                       value={customGroupName}
                       onChange={(e) => setCustomGroupName(e.target.value)}
-                      placeholder="Nhập tên nhóm mới..."
+                      placeholder="Nhập tên tiêu đề lớn mới..."
                       className="w-full min-h-[44px] px-3.5 rounded-xl glass-tool text-xs sm:text-sm font-semibold border border-sky-500"
                     />
                   )}
@@ -399,7 +422,7 @@ export const ItemManagerModal: React.FC<ItemManagerModalProps> = ({
                   onChange={(e) => setCopySourceId(e.target.value)}
                   className="min-h-[42px] px-3 rounded-xl glass-tool text-xs font-semibold"
                 >
-                  <option value="">Mẫu chuẩn 6 nhóm (20 mục)</option>
+                  <option value="">Khung mẫu chuẩn An Toàn Sinh Học</option>
                   {allSites
                     .filter((s) => s.id !== site.id)
                     .map((s) => (
@@ -439,7 +462,7 @@ export const ItemManagerModal: React.FC<ItemManagerModalProps> = ({
 
             {activeItems.length === 0 ? (
               <div className="glass-card rounded-2xl p-6 text-center text-sm text-slate-700">
-                Điểm này chưa có hạng mục nào. Nhấn &ldquo;Sao chép vào điểm này&rdquo; để khởi tạo bộ 20 hạng mục chuẩn.
+                Điểm này chưa có hạng mục nào. Nhấn &ldquo;Sao chép vào điểm này&rdquo; để khởi tạo bộ hạng mục chuẩn.
               </div>
             ) : (
               <div className="space-y-2">

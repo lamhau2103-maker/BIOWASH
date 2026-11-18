@@ -242,7 +242,7 @@ export const SiteDetailView: React.FC<{
     };
   }, [latestChemical]);
 
-  // Compute Radar 6 groups: Current inspection vs Previous inspection
+  // Compute Radar groups dynamically: Current inspection vs Previous inspection
   const radarData = useMemo(() => {
     const latestInsp = siteInspections[0];
     const prevInsp = siteInspections[1];
@@ -254,10 +254,29 @@ export const SiteDetailView: React.FC<{
       ? inspectionResults.filter((r) => r.inspection_id === prevInsp.id)
       : [];
 
-    return CHECKLIST_GROUPS.map((grp) => {
-      const shortName = grp.replace(/^\d+\)\s*/, '');
+    const cleanGroup = (raw: string) =>
+      (raw || '').trim().replace(/^\d+\s*[).:-]\s*/, '').trim();
+
+    const groupSet = new Map<string, string>();
+    latestRes.forEach((r) => {
+      const c = cleanGroup(r.group_name);
+      if (c && !groupSet.has(c.toLowerCase())) groupSet.set(c.toLowerCase(), c);
+    });
+    prevRes.forEach((r) => {
+      const c = cleanGroup(r.group_name);
+      if (c && !groupSet.has(c.toLowerCase())) groupSet.set(c.toLowerCase(), c);
+    });
+
+    if (groupSet.size === 0) {
+      CHECKLIST_GROUPS.forEach((grp) => {
+        const c = cleanGroup(grp);
+        groupSet.set(c.toLowerCase(), c);
+      });
+    }
+
+    return Array.from(groupSet.entries()).map(([normKey, shortName]) => {
       const calcScore = (rows: InspectionResultRow[]) => {
-        const gRows = rows.filter((r) => r.group_name === grp);
+        const gRows = rows.filter((r) => cleanGroup(r.group_name).toLowerCase() === normKey);
         const pass = gRows.filter((r) => r.status === 'pass').length;
         const fail = gRows.filter((r) => r.status === 'fail').length;
         return pass + fail > 0 ? Math.round((pass / (pass + fail)) * 100) : 100;
