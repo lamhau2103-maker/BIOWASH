@@ -140,19 +140,19 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, extern
 
       <div className="glass-card w-full max-w-md p-7 sm:p-9 relative z-10 space-y-6">
         <div className="flex flex-col items-center text-center space-y-3">
-          <div className="w-20 h-20 rounded-2xl bg-white border border-white/90 shadow-lg flex items-center justify-center overflow-hidden p-1.5">
+          <div className="w-24 h-24 rounded-2xl logo-3d-shimmer flex items-center justify-center p-2">
             <img
-              src="/assets/aistudio/23-logo-thai-viet-corporation_c66d41c5.jpeg"
-              alt="Thái Việt Corporation Logo"
-              className="w-full h-full object-contain"
+              src="/assets/aistudio/23-logo-thai-viet-corporation-removebg-preview__1__370dbc13.png"
+              alt="THÁI VIỆT CORPORATION Logo"
+              className="w-full h-full object-contain drop-shadow-md"
             />
           </div>
           <div className="space-y-1">
-            <h1 className="text-2xl font-bold tracking-tight text-white">
-              Thái Việt Corporation
+            <h1 className="text-2xl font-bold tracking-tight text-white uppercase">
+              THÁI VIỆT CORPORATION
             </h1>
-            <p className="text-sm text-white/95">
-              Hệ thống Checklist Điểm Rửa Xe Sát Khuẩn An Toàn Sinh Học
+            <p className="text-xs sm:text-sm font-bold text-white/95 uppercase tracking-wide">
+              HỆ THỐNG GIÁM SÁT AN TOÀN SINH HỌC ĐIỂM RỬA XE
             </p>
           </div>
         </div>
@@ -235,7 +235,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, extern
       </div>
 
       {/* Author signature at bottom-right corner */}
-      <div className="fixed bottom-2.5 right-3.5 z-30 pointer-events-none select-none px-2.5 py-1 rounded-lg bg-white/45 backdrop-blur-md border border-white/65 shadow-sm text-[11px] font-semibold text-slate-700 tracking-wide">
+      <div className="fixed bottom-2.5 right-3.5 z-30 pointer-events-none select-none text-[11px] font-semibold text-slate-700/85 tracking-wide">
         by Phuc Hau HR
       </div>
     </div>

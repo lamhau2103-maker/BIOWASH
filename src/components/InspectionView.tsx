@@ -2,11 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Camera,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   Clock,
-  FlaskConical,
+  Edit3,
   Lock,
   MapPin,
   MinusCircle,
@@ -16,6 +17,7 @@ import {
   Settings2,
   ShieldAlert,
   Truck,
+  X,
   XCircle,
 } from 'lucide-react';
 import { repository } from '../lib/repository';
@@ -35,7 +37,7 @@ import {
   VehicleWash,
   VehicleWashStep,
 } from '../types/database';
-import { CircularGauge, SignaturePad } from './CommonUI';
+import { CircularGauge } from './CommonUI';
 
 interface InspectionViewProps {
   profile: Profile;
@@ -162,27 +164,19 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
   const [savingItemId, setSavingItemId] = useState<string | null>(null);
   const [uploadingItemId, setUploadingItemId] = useState<string | null>(null);
 
-  // Quick Add Item Inline
+  // Quick Add & Quick Edit Item Title Inline
   const [showQuickAdd, setShowQuickAdd] = useState(false);
+  const [quickPanelMode, setQuickPanelMode] = useState<'add' | 'edit'>('add');
   const [quickTitle, setQuickTitle] = useState('');
   const [quickGroup, setQuickGroup] = useState<string>(CHECKLIST_GROUPS[0]);
   const [quickCritical, setQuickCritical] = useState(false);
+  const [quickEditItemId, setQuickEditItemId] = useState<string>('');
+  const [quickEditTitle, setQuickEditTitle] = useState<string>('');
 
-  // Chemical Disinfectant Info
-  const [chemName, setChemName] = useState('Virkon S / Glutaraldehyde');
-  const [chemConc, setChemConc] = useState('1.0%');
-  const [chemMixedDate, setChemMixedDate] = useState(
-    new Date().toISOString().slice(0, 10)
-  );
-  const [chemExpiryDate, setChemExpiryDate] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 3);
-    return d.toISOString().slice(0, 10);
-  });
+  // Inline Edit Item Title directly on Checklist Row
+  const [inlineEditItemId, setInlineEditItemId] = useState<string | null>(null);
+  const [inlineEditTitle, setInlineEditTitle] = useState<string>('');
 
-  // Signatures
-  const [inspectorSigUrl, setInspectorSigUrl] = useState<string | null>(null);
-  const [repSigUrl, setRepSigUrl] = useState<string | null>(null);
   const [completing, setCompleting] = useState(false);
 
   const siteActiveItems = useMemo(() => {
@@ -206,19 +200,6 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
       .then(({ inspection, results }) => {
         if (!mounted) return;
         setDraftInspection(inspection);
-        setInspectorSigUrl(inspection.signature_url || null);
-        if (inspection.gps?.rep_signature_url) {
-          setRepSigUrl(inspection.gps.rep_signature_url);
-        } else {
-          setRepSigUrl(null);
-        }
-        if (inspection.gps?.chemical_info) {
-          const ci = inspection.gps.chemical_info;
-          if (ci.name) setChemName(ci.name);
-          if (ci.concentration) setChemConc(ci.concentration);
-          if (ci.mixed_date) setChemMixedDate(ci.mixed_date);
-          if (ci.expiry_date) setChemExpiryDate(ci.expiry_date);
-        }
 
         const defaultDue = new Date();
         defaultDue.setDate(defaultDue.getDate() + 3);
@@ -391,6 +372,35 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
     }
   };
 
+  const handleQuickEditItemSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickEditItemId || !quickEditTitle.trim() || !canWrite) return;
+    try {
+      await repository.updateChecklistItem(quickEditItemId, {
+        title: quickEditTitle.trim(),
+      });
+      setShowQuickAdd(false);
+      onRefresh();
+      onShowToast('Đã cập nhật tên hạng mục thành công');
+    } catch (err) {
+      onShowToast(err instanceof Error ? err.message : 'Lỗi cập nhật tên hạng mục.');
+    }
+  };
+
+  const handleSaveInlineTitle = async (item: ChecklistItem) => {
+    const trimmed = inlineEditTitle.trim();
+    if (!trimmed || !canWrite) return;
+    try {
+      await repository.updateChecklistItem(item.id, { title: trimmed });
+      setInlineEditItemId(null);
+      setInlineEditTitle('');
+      onRefresh();
+      onShowToast('Đã sửa tên hạng mục thành công');
+    } catch (err) {
+      onShowToast(err instanceof Error ? err.message : 'Lỗi sửa tên hạng mục.');
+    }
+  };
+
   const handleCompleteInspection = async () => {
     if (!draftInspection || !currentSite || !canWrite) return;
 
@@ -431,19 +441,12 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
         lng: gpsCoords?.lng ?? currentSite.lng ?? 0,
         accuracy: gpsCoords?.accuracy,
         captured_at: new Date().toISOString(),
-        rep_signature_url: repSigUrl,
-        chemical_info: {
-          name: chemName,
-          concentration: chemConc,
-          mixed_date: chemMixedDate,
-          expiry_date: chemExpiryDate,
-        },
       };
 
       await repository.completeInspection(draftInspection.id, {
         score: Math.round(stats.score * 10) / 10,
         result: stats.resultCategory,
-        signature_url: inspectorSigUrl,
+        signature_url: null,
         gps: gpsPayload,
         finished_at: new Date().toISOString(),
       });
@@ -461,8 +464,6 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
       });
       setDraftInspection(fresh.inspection);
       setItemDrafts({});
-      setInspectorSigUrl(null);
-      setRepSigUrl(null);
     } catch (err) {
       onShowToast(err instanceof Error ? err.message : 'Lỗi khi hoàn tất kiểm tra.');
     } finally {
@@ -779,21 +780,65 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
             </div>
           </div>
 
-          {/* Quick Add Item Inline Bar */}
+          {/* Quick Add & Edit Item Inline Bar */}
           {canWrite && (
-            <div className="flex justify-end">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setShowQuickAdd((prev) => !prev)}
-                className="min-h-[44px] px-4 rounded-xl bg-teal-500/15 border border-teal-400/30 text-teal-800 dark:text-teal-200 text-xs font-bold flex items-center gap-1.5"
+                onClick={() => {
+                  if (showQuickAdd && quickPanelMode === 'add') {
+                    setShowQuickAdd(false);
+                  } else {
+                    setQuickPanelMode('add');
+                    setShowQuickAdd(true);
+                  }
+                }}
+                className={`min-h-[44px] px-4 rounded-xl text-xs font-bold flex items-center gap-1.5 transition ${
+                  showQuickAdd && quickPanelMode === 'add'
+                    ? 'btn-accent'
+                    : 'bg-teal-500/15 border border-teal-400/30 text-teal-800 dark:text-teal-200 hover:bg-teal-500/25'
+                }`}
               >
                 <Plus className="w-4 h-4" />
-                <span>{showQuickAdd ? 'Đóng thêm nhanh' : 'Thêm nhanh hạng mục ngay tại hiện trường'}</span>
+                <span>
+                  {showQuickAdd && quickPanelMode === 'add'
+                    ? 'Đóng thêm nhanh'
+                    : 'Thêm nhanh hạng mục ngay tại hiện trường'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (showQuickAdd && quickPanelMode === 'edit') {
+                    setShowQuickAdd(false);
+                  } else {
+                    const firstItem = siteActiveItems[0];
+                    if (firstItem) {
+                      setQuickEditItemId(firstItem.id);
+                      setQuickEditTitle(firstItem.title);
+                    }
+                    setQuickPanelMode('edit');
+                    setShowQuickAdd(true);
+                  }
+                }}
+                className={`min-h-[44px] px-4 rounded-xl text-xs font-bold flex items-center gap-1.5 transition ${
+                  showQuickAdd && quickPanelMode === 'edit'
+                    ? 'btn-accent'
+                    : 'glass-tool'
+                }`}
+              >
+                <Edit3 className="w-4 h-4" />
+                <span>
+                  {showQuickAdd && quickPanelMode === 'edit'
+                    ? 'Đóng sửa tên hạng mục'
+                    : 'Sửa tên hạng mục'}
+                </span>
               </button>
             </div>
           )}
 
-          {showQuickAdd && canWrite && (
+          {showQuickAdd && canWrite && quickPanelMode === 'add' && (
             <form onSubmit={handleQuickAddItem} className="glass-card rounded-2xl p-4 space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <select
@@ -830,6 +875,58 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
                   className="min-h-[44px] px-5 rounded-xl bg-teal-600 text-white text-xs font-bold"
                 >
                   Lưu hạng mục
+                </button>
+              </div>
+            </form>
+          )}
+
+          {showQuickAdd && canWrite && quickPanelMode === 'edit' && (
+            <form
+              onSubmit={handleQuickEditItemSubmit}
+              className="glass-card rounded-2xl p-4 space-y-3"
+            >
+              <div className="text-xs font-bold text-slate-700 dark:text-white flex items-center gap-1.5">
+                <Edit3 className="w-4 h-4 text-teal-600" />
+                <span>Chọn hạng mục cần sửa tên và nhập tên mới:</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <select
+                  value={quickEditItemId}
+                  onChange={(e) => {
+                    const selectedId = e.target.value;
+                    setQuickEditItemId(selectedId);
+                    const found = siteActiveItems.find((it) => it.id === selectedId);
+                    if (found) setQuickEditTitle(found.title);
+                  }}
+                  className="min-h-[46px] px-3 rounded-xl bg-white/85 dark:bg-slate-900/70 border border-slate-300 dark:border-white/20 text-xs sm:text-sm font-semibold"
+                >
+                  {siteActiveItems.map((it, i) => (
+                    <option key={it.id} value={it.id}>
+                      Mục {i + 1}: {it.title}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  value={quickEditTitle}
+                  onChange={(e) => setQuickEditTitle(e.target.value)}
+                  placeholder="Nhập tên hạng mục mới..."
+                  className="min-h-[46px] px-3.5 rounded-xl bg-white/85 dark:bg-slate-900/70 border border-slate-300 dark:border-white/20 text-sm font-semibold"
+                />
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowQuickAdd(false)}
+                  className="min-h-[44px] px-4 rounded-xl glass-tool text-xs font-bold"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  className="min-h-[44px] px-5 rounded-xl btn-accent text-xs font-bold"
+                >
+                  Lưu tên hạng mục
                 </button>
               </div>
             </form>
@@ -921,9 +1018,58 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
                                       </>
                                     )}
                                   </div>
-                                  <p className="text-base font-bold text-slate-900 dark:text-white leading-snug">
-                                    {item.title}
-                                  </p>
+                                  {inlineEditItemId === item.id ? (
+                                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
+                                      <input
+                                        type="text"
+                                        value={inlineEditTitle}
+                                        onChange={(e) => setInlineEditTitle(e.target.value)}
+                                        placeholder="Nhập tên hạng mục..."
+                                        className="flex-1 min-h-[42px] px-3.5 rounded-xl bg-white/90 border border-sky-400 text-sm font-bold text-slate-900"
+                                      />
+                                      <div className="flex items-center gap-1.5 shrink-0">
+                                        <button
+                                          type="button"
+                                          onClick={() => handleSaveInlineTitle(item)}
+                                          className="min-h-[40px] px-3.5 rounded-xl btn-accent text-xs font-bold flex items-center gap-1"
+                                        >
+                                          <Check className="w-3.5 h-3.5" />
+                                          <span>Lưu tên</span>
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setInlineEditItemId(null);
+                                            setInlineEditTitle('');
+                                          }}
+                                          className="min-h-[40px] px-3 rounded-xl glass-tool text-xs font-bold flex items-center gap-1"
+                                        >
+                                          <X className="w-3.5 h-3.5" />
+                                          <span>Hủy</span>
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-start justify-between gap-2">
+                                      <p className="text-base font-bold text-slate-900 dark:text-white leading-snug">
+                                        {item.title}
+                                      </p>
+                                      {canWrite && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setInlineEditItemId(item.id);
+                                            setInlineEditTitle(item.title);
+                                          }}
+                                          className="min-h-[34px] px-2.5 rounded-xl glass-tool text-[11px] font-bold flex items-center gap-1 shrink-0"
+                                          title="Sửa tên hạng mục này"
+                                        >
+                                          <Edit3 className="w-3.5 h-3.5" />
+                                          <span>Sửa tên</span>
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
                                 {isSaving && (
                                   <span className="text-xs text-teal-600 dark:text-teal-300 font-medium shrink-0">
@@ -1125,80 +1271,6 @@ export const InspectionView: React.FC<InspectionViewProps> = ({
                   </div>
                 );
               })}
-
-              {/* Disinfectant Chemical Information Record */}
-              <div className="glass-card rounded-3xl p-5 space-y-3">
-                <div className="flex items-center gap-2 text-sm font-bold text-teal-700 dark:text-teal-300">
-                  <FlaskConical className="w-5 h-5" />
-                  <span>Thông tin Hóa Chất Sát Khuẩn đang sử dụng tại điểm</span>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-                  <div>
-                    <label className="block text-xs font-semibold mb-1">Tên hóa chất</label>
-                    <input
-                      type="text"
-                      disabled={!canWrite}
-                      value={chemName}
-                      onChange={(e) => setChemName(e.target.value)}
-                      className="w-full min-h-[46px] px-3 rounded-xl bg-white/80 dark:bg-slate-900/60 border border-slate-300 dark:border-white/20 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold mb-1">Nồng độ pha (%)</label>
-                    <input
-                      type="text"
-                      disabled={!canWrite}
-                      value={chemConc}
-                      onChange={(e) => setChemConc(e.target.value)}
-                      className="w-full min-h-[46px] px-3 rounded-xl bg-white/80 dark:bg-slate-900/60 border border-slate-300 dark:border-white/20 text-sm font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold mb-1">Ngày pha</label>
-                    <input
-                      type="date"
-                      disabled={!canWrite}
-                      value={chemMixedDate}
-                      onChange={(e) => setChemMixedDate(e.target.value)}
-                      className="w-full min-h-[46px] px-3 rounded-xl bg-white/80 dark:bg-slate-900/60 border border-slate-300 dark:border-white/20 text-sm font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold mb-1">Hạn dùng dung dịch</label>
-                    <input
-                      type="date"
-                      disabled={!canWrite}
-                      value={chemExpiryDate}
-                      onChange={(e) => setChemExpiryDate(e.target.value)}
-                      className="w-full min-h-[46px] px-3 rounded-xl bg-white/80 dark:bg-slate-900/60 border border-slate-300 dark:border-white/20 text-sm font-mono"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Hand-drawn Signatures */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <SignaturePad
-                  label={`Chữ ký Người kiểm tra (${profile.full_name})`}
-                  existingUrl={inspectorSigUrl}
-                  disabled={!canWrite}
-                  onSaveBlob={async (blob) => {
-                    const url = await repository.uploadEvidenceFile(blob, 'signatures', 'png');
-                    setInspectorSigUrl(url);
-                    onShowToast('Đã lưu chữ ký người kiểm tra');
-                  }}
-                />
-                <SignaturePad
-                  label={`Chữ ký Đại diện Điểm rửa xe (${currentSite?.manager_name || 'Đại diện'})`}
-                  existingUrl={repSigUrl}
-                  disabled={!canWrite}
-                  onSaveBlob={async (blob) => {
-                    const url = await repository.uploadEvidenceFile(blob, 'signatures', 'png');
-                    setRepSigUrl(url);
-                    onShowToast('Đã lưu chữ ký đại diện điểm rửa xe');
-                  }}
-                />
-              </div>
 
               {/* Complete Inspection Button */}
               {canWrite && (

@@ -247,16 +247,21 @@ export default function App() {
       <header className="sticky top-0 z-30 glass-panel rounded-none border-x-0 border-t-0 px-3 sm:px-6 h-14 flex items-center justify-between gap-2 sm:gap-4">
         {/* Zone 1: Single-line Brand Wordmark */}
         <div className="flex items-center gap-2.5 shrink-0">
-          <div className="w-9 h-9 rounded-xl bg-white border border-white/90 shadow-sm flex items-center justify-center overflow-hidden p-0.5 shrink-0">
+          <div className="w-10 h-10 rounded-xl logo-3d-shimmer flex items-center justify-center p-1 shrink-0">
             <img
-              src="/assets/aistudio/23-logo-thai-viet-corporation_c66d41c5.jpeg"
-              alt="Thái Việt Corporation Logo"
-              className="w-full h-full object-contain"
+              src="/assets/aistudio/23-logo-thai-viet-corporation-removebg-preview__1__370dbc13.png"
+              alt="THÁI VIỆT CORPORATION Logo"
+              className="w-full h-full object-contain drop-shadow-sm"
             />
           </div>
-          <span className="font-bold text-sm sm:text-base tracking-tight whitespace-nowrap shrink-0">
-            Thái Việt Corporation
-          </span>
+          <div className="flex flex-col leading-tight shrink-0">
+            <span className="font-bold text-sm sm:text-base tracking-tight whitespace-nowrap uppercase">
+              THÁI VIỆT CORPORATION
+            </span>
+            <span className="text-[10px] font-semibold text-white/80 hidden lg:inline whitespace-nowrap uppercase tracking-wider">
+              HỆ THỐNG GIÁM SÁT AN TOÀN SINH HỌC ĐIỂM RỬA XE
+            </span>
+          </div>
         </div>
 
         {/* Zone 2: Live Connection Status & User Profile */}
@@ -722,7 +727,7 @@ export default function App() {
       )}
       {/* Author signature at bottom-right corner */}
       <div
-        className={`fixed right-3.5 z-30 pointer-events-none select-none px-2.5 py-1 rounded-lg bg-white/45 backdrop-blur-md border border-white/65 shadow-sm text-[11px] font-semibold text-slate-700 tracking-wide ${
+        className={`fixed right-3.5 z-30 pointer-events-none select-none text-[11px] font-semibold text-slate-700/85 tracking-wide ${
           deviceType === 'mobile' ? 'bottom-20' : 'bottom-2.5'
         }`}
       >

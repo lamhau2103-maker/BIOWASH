@@ -633,15 +633,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   if (activeSites.length === 0) {
     return (
       <div className="glass-card density-pad text-center space-y-4 py-10">
-        <div className="w-20 h-20 rounded-2xl bg-white border border-white/90 shadow-md flex items-center justify-center overflow-hidden p-1.5 mx-auto">
+        <div className="w-24 h-24 rounded-2xl logo-3d-shimmer flex items-center justify-center p-2 mx-auto">
           <img
-            src="/assets/aistudio/23-logo-thai-viet-corporation_c66d41c5.jpeg"
-            alt="Thái Việt Corporation Logo"
-            className="w-full h-full object-contain"
+            src="/assets/aistudio/23-logo-thai-viet-corporation-removebg-preview__1__370dbc13.png"
+            alt="THÁI VIỆT CORPORATION Logo"
+            className="w-full h-full object-contain drop-shadow-md"
           />
         </div>
-        <h2 className="fluid-title font-bold text-white">
-          Chào mừng đến với Thái Việt Corporation
+        <h2 className="fluid-title font-bold text-white uppercase">
+          CHÀO MỪNG ĐẾN VỚI THÁI VIỆT CORPORATION
         </h2>
         <p className="text-sm text-white/80 max-w-md mx-auto">
           Hệ thống đang đọc trực tiếp từ cơ sở dữ liệu Supabase. Hãy thêm điểm rửa xe đầu tiên hoặc đồng bộ dữ liệu cũ từ trình duyệt lên Supabase.
